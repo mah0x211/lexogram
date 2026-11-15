@@ -1,0 +1,12 @@
+# Ignore all hidden files
+.*
+
+# Generated files
+*.out
+
+# Keep these hidden files
+!.gitignore
+!.github
+!.lua-format
+!.luacheckrc
+!.luacov
