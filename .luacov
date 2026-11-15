@@ -3,4 +3,5 @@ runreport = true
 deletestats = true
 modules = {
     ['lexogram'] = 'lua/lexogram.lua',
+    ['lexogram.compat'] = 'lua/lexogram/compat.lua',
 }
