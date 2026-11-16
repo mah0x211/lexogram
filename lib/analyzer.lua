@@ -46,7 +46,8 @@
 --
 -- Error recovery is not implemented yet: the first syntax error, or an
 -- unterminated delimited token, stops the analysis with nil and an error
--- { code, pos, expected, actual, message }.
+-- { code, pos, line, column, expected, actual, message } (column in bytes,
+-- see lexogram.events).
 local type = type
 local error = error
 local next = next
@@ -56,6 +57,7 @@ local concat = table.concat
 local tokenize = require('lexogram.tokenizer').tokenize
 local quote = require('lexogram.text').quote
 local codegen = require('lexogram.compile.codegen')
+local events_module = require('lexogram.events')
 
 local MATCH = codegen.MATCH
 local CALL = codegen.CALL
@@ -69,9 +71,11 @@ local TRY = codegen.TRY
 -- dispatch below.
 
 -- Event opcodes.
-local TOKEN_EVENT = 1
-local ENTER_EVENT = 2
-local EXIT_EVENT = 3
+local TOKEN_EVENT = events_module.TOKEN
+local ENTER_EVENT = events_module.ENTER
+local EXIT_EVENT = events_module.EXIT
+local line_starts = events_module.line_starts
+local locate = events_module.locate
 
 -- Kind of the end of input in lookahead and decision tables.
 local END = 0
@@ -137,6 +141,16 @@ local function syntax_error(kinds, pos, actual, expected)
     }
 end
 
+--- with_position adds the line and the byte column of err.pos to err.
+--- @param err table
+--- @param source string
+--- @return table err
+local function with_position(err, source)
+    local line, start = locate(line_starts(source), err.pos)
+    err.line, err.column = line, err.pos - start + 1
+    return err
+end
+
 --- skip_set returns the kinds of the skipped tokens.
 --- @param kinds table
 --- @return table
@@ -154,7 +168,7 @@ end
 --- @param compiled table result of lexogram.compile
 --- @param source string
 --- @return table? result { source, events, count, errors, grammar }
---- @return table? err { code, pos, expected, actual, message }
+--- @return table? err { code, pos, line, column, expected, actual, message }
 local function parse(compiled, source)
     if type(compiled) ~= 'table' then
         error('compiled must be table, got ' .. type(compiled), 2)
@@ -431,7 +445,7 @@ local function parse(compiled, source)
     end
 
     if err then
-        return nil, err
+        return nil, with_position(err, source)
     end
     -- drop events left over from rewinds
     for i = #events, count * 4 + 1, -1 do

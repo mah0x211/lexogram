@@ -872,11 +872,35 @@ function testcase.parse_reports_syntax_errors()
         assert.equal(err, {
             code = 'syntax_error',
             pos = case[2],
+            line = 1,
+            column = case[2],
             actual = case[3],
             expected = case[4],
             message = case[5],
         })
     end
+end
+
+function testcase.parse_reports_line_and_column_of_errors()
+    -- the default space token includes line breaks
+    local compiled = compiled_of({
+        symbols = {
+            '=',
+        },
+        keywords = {
+            'local',
+        },
+        rules = {
+            chunk = '("local" name "=" number)*',
+        },
+    })
+    local result, err = analyzer.parse(compiled, 'local a = 1\nlocal b =\n  =')
+
+    assert.is_nil(result)
+    assert.equal(err.pos, 25)
+    assert.equal(err.line, 3)
+    assert.equal(err.column, 3)
+    assert.equal(err.message, 'unexpected "=", expected number')
 end
 
 function testcase.parse_reports_errors_after_failed_alternatives()
@@ -923,6 +947,8 @@ function testcase.parse_reports_unterminated_tokens()
     assert.equal(err, {
         code = 'unterminated_token',
         pos = 3,
+        line = 1,
+        column = 3,
         actual = compiled.names.long,
         expected = {},
         message = 'unterminated long',
