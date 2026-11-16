@@ -107,6 +107,24 @@ function testcase.build_numbers_definitions()
                 1,
             },
         },
+        {
+            id = 6,
+            kind = 'delimited',
+            name = 'str',
+            segments = {
+                'tokens',
+                'str',
+            },
+        },
+    })
+    assert.equal(result.delimited.tokens, {
+        [6] = {
+            close = {
+                {
+                    literal = '"',
+                },
+            },
+        },
     })
 
     -- the automaton tokenizes with longest match and literal priority
@@ -144,20 +162,6 @@ function testcase.build_numbers_definitions()
             'IF',
         },
     })
-end
-
-function testcase.build_ignores_delimited_tokens()
-    local result, diagnostics = lexer.build(grammar({
-        comment = {
-            open = '"/*"',
-            close = '"*/"',
-        },
-        n = 'DIGIT+',
-    }))
-
-    assert.equal(diagnostics, {})
-    assert.equal(#result.defs, 1)
-    assert.equal(result.defs[1].name, 'n')
 end
 
 function testcase.build_reports_fragment_recursion()
@@ -365,5 +369,527 @@ function testcase.build_reports_no_warning_with_errors()
             'tokens',
             'e',
         }, 'tokens.e matches the empty string'),
+    })
+end
+
+-- delimited tokens
+
+local function lua_long(prefix)
+    return {
+        open = '"' .. prefix .. '[" level "["',
+        close = '"]" level "]"',
+        level = '"="*',
+    }
+end
+
+-- the capture bytes by the runtime contract: from pos + prefix, run the
+-- capture automaton greedily until it has no transition
+local function extract_capture(token, s, pos)
+    local d = token.capture
+    local first = pos + token.prefix
+    local state, stop = 1, first
+    for i = first, #s do
+        state = d.trans[(state - 1) * d.nclasses + d.classes[s:byte(i) + 1]]
+        if state == 0 then
+            break
+        end
+        stop = i + 1
+    end
+    return s:sub(first, stop - 1)
+end
+
+function testcase.build_compiles_lua_long_strings_and_comments()
+    local result, diagnostics = lexer.build(grammar({
+        name = 'ALPHA+',
+        long_string = lua_long(''),
+        long_comment = lua_long('--'),
+    }, {
+        '-',
+    }))
+
+    assert.equal(diagnostics, {})
+    assert.equal(result.defs[3], {
+        id = 3,
+        kind = 'delimited',
+        name = 'long_comment',
+        segments = {
+            'tokens',
+            'long_comment',
+        },
+    })
+    assert.equal(result.defs[4].name, 'long_string')
+
+    local tokens = result.delimited.tokens
+    assert.equal(tokens[3].prefix, 3)
+    assert.equal(tokens[4].prefix, 1)
+    assert.equal(tokens[4].close, {
+        {
+            literal = ']',
+        },
+        {
+            capture = true,
+        },
+        {
+            literal = ']',
+        },
+    })
+
+    local open = result.delimited.open
+    for _, case in ipairs({
+        {
+            '[[',
+            4,
+            3,
+        },
+        {
+            '[==[ x',
+            4,
+            5,
+        },
+        {
+            '--[[',
+            3,
+            5,
+        },
+        {
+            '--[=[',
+            3,
+            6,
+        },
+    }) do
+        assert.equal({
+            dfa.longest(open, case[1], 1),
+        }, {
+            case[2],
+            case[3],
+        })
+    end
+    for _, s in ipairs({
+        '[=',
+        '[x',
+        '--',
+        'x[[',
+    }) do
+        assert.equal({
+            dfa.longest(open, s, 1),
+        }, {})
+    end
+
+    assert.equal(extract_capture(tokens[4], '[==[ x ]==]', 1), '==')
+    assert.equal(extract_capture(tokens[3], 'a --[=[', 3), '=')
+    assert.equal(extract_capture(tokens[4], '[[', 1), '')
+end
+
+function testcase.build_compiles_delimited_tokens_with_captures_at_the_ends()
+    local result, diagnostics = lexer.build(grammar({
+        heredoc = {
+            open = '"<<" tag',
+            close = '"\\n" tag',
+            tag = 'ALPHA+',
+        },
+        quoted = {
+            open = 'q "{"',
+            close = '"}" q',
+            q = '"q" DIGIT?',
+        },
+    }))
+
+    assert.equal(diagnostics, {})
+    assert.equal(result.delimited.tokens[1].prefix, 2)
+    assert.equal(result.delimited.tokens[2].prefix, 0)
+    assert.equal(extract_capture(result.delimited.tokens[1], '<<EOF\n', 1),
+                 'EOF')
+    assert.equal(extract_capture(result.delimited.tokens[2], 'q7{', 1), 'q7')
+    assert.equal({
+        dfa.longest(result.delimited.open, '<<EOF', 1),
+    }, {
+        1,
+        6,
+    })
+end
+
+-- a diagnostic with segments and pos
+local function at(code, segments, pos, message)
+    return {
+        severity = 'error',
+        code = code,
+        segments = segments,
+        pos = pos,
+        message = message,
+    }
+end
+
+function testcase.build_reports_invalid_delimiters()
+    local result, diagnostics = lexer.build(grammar({
+        twice = {
+            open = 'a "x" a',
+            close = 'a',
+            a = '"a"',
+        },
+        nested = {
+            open = '"x" (a | "y")',
+            close = '"x"',
+            a = '"a"',
+        },
+        two = {
+            open = 'a b',
+            close = '"x"',
+            a = '"a"',
+            b = '"b"',
+        },
+        variable = {
+            open = '"x"+ a',
+            close = '"y"',
+            a = '"a"',
+        },
+        bad_close = {
+            open = '"x" a',
+            close = '"]" (a | "z") "]"*',
+            a = '"a"',
+        },
+        foreign = {
+            open = '"x"',
+            close = '"y" b',
+            b = '"b"',
+        },
+        unused = {
+            open = '"u" a',
+            close = '"v"',
+            a = '"a"',
+            extra = '"e"',
+        },
+    }))
+
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        at('invalid_delimiter', {
+            'tokens',
+            'bad_close',
+            'close',
+        }, 6, 'tokens.bad_close.close may contain only literals and captures'),
+        at('invalid_delimiter', {
+            'tokens',
+            'bad_close',
+            'close',
+        }, 15, 'tokens.bad_close.close may contain only literals and captures'),
+        at('invalid_delimiter', {
+            'tokens',
+            'foreign',
+            'close',
+        }, 5,
+           'tokens.foreign.close refers to capture "b", which open does not capture'),
+        at('invalid_delimiter', {
+            'tokens',
+            'foreign',
+            'b',
+        }, nil,
+           'tokens.foreign.b is a capture definition that open does not use'),
+        at('invalid_delimiter', {
+            'tokens',
+            'nested',
+            'open',
+        }, 6, 'tokens.nested.open must refer to capture "a" as an item of' ..
+               ' its top-level sequence'),
+        at('invalid_delimiter', {
+            'tokens',
+            'twice',
+            'open',
+        }, 7, 'tokens.twice.open may refer to only one capture, but refers' ..
+               ' to "a" again'),
+        at('invalid_delimiter', {
+            'tokens',
+            'two',
+            'open',
+        }, 3, 'tokens.two.open may refer to only one capture, but refers' ..
+               ' to "b" again'),
+        at('invalid_delimiter', {
+            'tokens',
+            'unused',
+            'extra',
+        }, nil,
+           'tokens.unused.extra is a capture definition that open does not use'),
+        at('invalid_delimiter', {
+            'tokens',
+            'variable',
+            'open',
+        }, 1, 'tokens.variable.open must have a fixed length before capture "a"'),
+    })
+end
+
+function testcase.build_checks_fixed_length_with_code_point_classes()
+    local result, diagnostics = lexer.build(grammar({
+        mixed = {
+            open = '[a\\u{e9}] a',
+            close = '"x"',
+            a = '"a"',
+        },
+        same = {
+            open = '[\\u{e9}-\\u{ff}] _two a',
+            close = '"y" a',
+            a = '"!"',
+        },
+        _two = '[\\u{100}-\\u{7ff}] | "ab"',
+    }))
+
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        at('invalid_delimiter', {
+            'tokens',
+            'mixed',
+            'open',
+        }, 1, 'tokens.mixed.open must have a fixed length before capture "a"'),
+    })
+
+    result, diagnostics = lexer.build(grammar({
+        same = {
+            open = '[\\u{e9}-\\u{ff}] _two a',
+            close = '"y" a',
+            a = '"!"',
+        },
+        three = {
+            open = '[\\u{3042}-\\u{3093}] _two _two a',
+            close = '"z" a',
+            a = '"?"',
+        },
+        four = {
+            open = '[\\u{10000}-\\u{10FFFF}]? "abcd" a',
+            close = '"w" a',
+            a = '"#"',
+        },
+        _two = '[\\u{100}-\\u{7ff}] | "ab"',
+    }))
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        at('invalid_delimiter', {
+            'tokens',
+            'four',
+            'open',
+        }, 1, 'tokens.four.open must have a fixed length before capture "a"'),
+    })
+
+    result, diagnostics = lexer.build(grammar({
+        same = {
+            open = '[\\u{e9}-\\u{ff}] _two a',
+            close = '"y" a',
+            a = '"!"',
+        },
+        three = {
+            open = '[\\u{3042}-\\u{3093}] _two _two a',
+            close = '"z" a',
+            a = '"?"',
+        },
+        four = {
+            open = '[\\u{10000}-\\u{10FFFF}] a',
+            close = '"w" a',
+            a = '"#"',
+        },
+        _two = '[\\u{100}-\\u{7ff}] | "ab"',
+    }))
+    assert.equal(diagnostics, {})
+    assert.equal(result.delimited.tokens[1].prefix, 4)
+    assert.equal(result.delimited.tokens[2].prefix, 4)
+    assert.equal(result.delimited.tokens[3].prefix, 7)
+end
+
+function testcase.build_reports_empty_delimiters()
+    local result, diagnostics = lexer.build(grammar({
+        empty_open = {
+            open = '"x"?',
+            close = '"y"',
+        },
+        empty_close = {
+            open = '"[" level "["',
+            close = 'level',
+            level = '"="*',
+        },
+        -- a capture definition may match the empty string
+        fine = {
+            open = '"<" level "<"',
+            close = '">" level ">"',
+            level = '"="*',
+        },
+    }))
+
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        {
+            severity = 'error',
+            code = 'empty_match',
+            segments = {
+                'tokens',
+                'empty_close',
+                'close',
+            },
+            message = 'tokens.empty_close.close matches the empty string',
+        },
+        {
+            severity = 'error',
+            code = 'empty_match',
+            segments = {
+                'tokens',
+                'empty_open',
+                'open',
+            },
+            message = 'tokens.empty_open.open matches the empty string',
+        },
+    })
+end
+
+function testcase.build_reports_capture_overlap()
+    local result, diagnostics = lexer.build(grammar({
+        same = {
+            open = '"[" level "="',
+            close = '"]"',
+            level = '"="*',
+        },
+        choice = {
+            open = '"(" level ("=" | "[")',
+            close = '")"',
+            level = '"="*',
+        },
+        -- the item after the capture is optional, so the next one counts
+        skip = {
+            open = '"{" level "!"? "="',
+            close = '"}"',
+            level = '"="*',
+        },
+        fine = {
+            open = '"<" level "<"',
+            close = '">"',
+            level = '"="*',
+        },
+    }))
+
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        at('capture_overlap', {
+            'tokens',
+            'choice',
+            'open',
+        }, 5, 'tokens.choice.open: capture "level" can continue with a byte' ..
+               ' that can start the rest of open, e.g. "="'),
+        at('capture_overlap', {
+            'tokens',
+            'same',
+            'open',
+        }, 5, 'tokens.same.open: capture "level" can continue with a byte' ..
+               ' that can start the rest of open, e.g. "="'),
+        at('capture_overlap', {
+            'tokens',
+            'skip',
+            'open',
+        }, 5, 'tokens.skip.open: capture "level" can continue with a byte' ..
+               ' that can start the rest of open, e.g. "="'),
+    })
+end
+
+function testcase.build_reports_delimiter_conflicts()
+    local result, diagnostics = lexer.build(grammar({
+        long = lua_long(''),
+        short = {
+            open = '"[["',
+            close = '"]]"',
+        },
+        other = {
+            open = '"<"',
+            close = '">"',
+        },
+    }))
+
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        {
+            severity = 'error',
+            code = 'delimiter_conflict',
+            segments = {
+                'tokens',
+                'short',
+                'open',
+            },
+            message = 'tokens.short.open can match the same string as' ..
+                ' tokens.long.open, e.g. "[["',
+        },
+    })
+end
+
+function testcase.build_allows_delimited_tokens_overlapping_other_tokens()
+    local result, diagnostics = lexer.build(grammar({
+        long = lua_long(''),
+        bracket = '"[" "["?',
+    }, {
+        '[[',
+    }))
+
+    assert.equal(diagnostics, {})
+    assert.is_table(result)
+end
+
+function testcase.build_reports_delimited_too_large()
+    local result, diagnostics = without_hook(lexer.build, grammar({
+        t = {
+            open = '"x" c',
+            close = '"y"',
+            c = '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 16),
+        },
+    }))
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 50000 states'),
+    })
+
+    -- the open automaton alone is too large
+    result, diagnostics = without_hook(lexer.build, grammar({
+        t = {
+            open = '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 16),
+            close = '"y"',
+        },
+    }))
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 50000 states'),
+    })
+
+    -- the NFA of a capture definition is too large
+    local tokens = {
+        t = {
+            open = '"x" c',
+            close = '"y"',
+            c = '_f20',
+        },
+        _f1 = '"x"',
+    }
+    for i = 2, 20 do
+        tokens['_f' .. i] = '_f' .. (i - 1) .. ' _f' .. (i - 1)
+    end
+    result, diagnostics = without_hook(lexer.build, grammar(tokens))
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the automaton would have more than 200000 states'),
+    })
+
+    -- the rest of open after the capture is too large
+    result, diagnostics = without_hook(lexer.build, grammar({
+        t = {
+            open = '"x" c "y"',
+            close = '"y"',
+            c = '"c"',
+        },
+        u = {
+            open = '"u" c ("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 16),
+            close = '"y"',
+            c = '"c"',
+        },
+    }))
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 50000 states'),
     })
 end

@@ -10,9 +10,9 @@ local function valid_grammar()
         tokens = {
             number = '[0-9]+',
             comment = {
-                open = '"/*"',
-                close = '"*/"',
-                body = '[^*]*',
+                open = '"/*" mark',
+                close = 'mark "*/"',
+                mark = '"!"*',
             },
         },
         symbols = {
@@ -1760,6 +1760,11 @@ function testcase.check_accepts_realistic_token_set()
                 close = '"]" level "]"',
                 level = '"="*',
             },
+            long_comment = {
+                open = '"--[" level "["',
+                close = '"]" level "]"',
+                level = '"="*',
+            },
         },
         symbols = {
             '=',
@@ -1790,6 +1795,7 @@ function testcase.check_accepts_realistic_token_set()
         skip = {
             'space',
             'comment',
+            'long_comment',
         },
         rules = {
             chunk = 'stat* _last?',
@@ -1838,5 +1844,25 @@ function testcase.check_rejects_delimited_token_named_like_fragment()
                 ' is ambiguous with a fragment reference'),
         at('invalid_reference', 'tokens.n', 5,
            'tokens.n refers to "_d", which is a token, not a fragment'),
+    })
+end
+
+function testcase.check_reports_delimited_errors_with_other_diagnostics()
+    local grammar = lua_like({
+        tokens = {
+            bad = {
+                open = '"<" a a',
+                close = '">"',
+                a = '"a"',
+            },
+        },
+    })
+
+    assert.equal(check.check(grammar), {
+        warn('unused_token', 'tokens.bad',
+             'tokens.bad is not used by any rule and not listed in skip'),
+        at('invalid_delimiter', 'tokens.bad.open', 7,
+           'tokens.bad.open may refer to only one capture, but refers to' ..
+               ' "a" again'),
     })
 end

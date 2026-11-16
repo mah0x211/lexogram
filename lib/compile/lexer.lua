@@ -24,7 +24,8 @@
 -- diagnostics: fragment recursion, automata that are too large, tokens
 -- matching the empty string, conflicts between pattern tokens or between
 -- literals, and pattern tokens that never win. Delimited token tables are
--- not handled here. The grammar must have passed the structure, names and
+-- checked and compiled with lexogram.compile.delimited. The grammar must
+-- have passed the structure, names and
 -- patterns passes of lexogram.check without errors; in particular every
 -- fragment is a pattern string (the names pass rejects a delimited token
 -- table named like a fragment), so every reference can be expanded.
@@ -33,7 +34,6 @@ local next = next
 local rawget = rawget
 local ipairs = ipairs
 local byte = string.byte
-local char = string.char
 local concat = table.concat
 local sort = table.sort
 local byte_less = require('lexogram.compat').byte_less
@@ -41,6 +41,7 @@ local parse = require('lexogram.pattern').parse
 local quote = require('lexogram.text').quote
 local nfa = require('lexogram.compile.nfa')
 local dfa = require('lexogram.compile.dfa')
+local delimited = require('lexogram.compile.delimited')
 
 -- Byte value of "_", which starts a fragment name.
 local UNDERSCORE = 95
@@ -77,43 +78,48 @@ end
 --- @return string
 local function label(def)
     local segs = def.segments
-    if def.kind == 'token' then
+    if segs[1] == 'tokens' then
         return 'tokens.' .. segs[2]
     end
     return segs[1] .. '[' .. segs[2] .. ']'
 end
 
---- collect_tokens returns the sorted names of the pattern tokens and the
---- parsed fragments. Delimited token tables are skipped.
+--- collect_tokens returns the sorted names of the pattern tokens, the
+--- parsed fragments and the sorted names of the delimited token tables.
 --- @param tokens table
 --- @return string[] names
 --- @return table fragments name -> AST
+--- @return string[] tables
 local function collect_tokens(tokens)
-    local names, fragments = {}, {}
+    local names, fragments, tables = {}, {}, {}
     for k, v in next, tokens do
-        if type(v) == 'string' then
-            if byte(k, 1) == UNDERSCORE then
-                fragments[k] = parse(v, 'tokens')
-            else
-                names[#names + 1] = k
-            end
+        if type(v) == 'table' then
+            tables[#tables + 1] = k
+        elseif byte(k, 1) == UNDERSCORE then
+            fragments[k] = parse(v, 'tokens')
+        else
+            names[#names + 1] = k
         end
     end
     sort(names, byte_less)
-    return names, fragments
+    sort(tables, byte_less)
+    return names, fragments, tables
 end
 
 --- collect_definitions returns the definitions of the grammar (pattern
---- tokens sorted by name, then symbols and keywords in index order), the
---- matching nfa definitions, the ranks and the fragments.
+--- tokens sorted by name, then symbols and keywords in index order, then
+--- delimited tokens sorted by name), the nfa definitions of the pattern
+--- tokens and literals, the ranks, the fragments and the ids of the
+--- delimited tokens by name.
 --- @param grammar table
 --- @return table[] defs
 --- @return table[] nfa_defs
 --- @return table rank
 --- @return table fragments
+--- @return table delimited_ids name -> id
 local function collect_definitions(grammar)
     local tokens = rawget(grammar, 'tokens')
-    local names, fragments = collect_tokens(tokens)
+    local names, fragments, tables = collect_tokens(tokens)
     local defs, nfa_defs, rank = {}, {}, {}
     for i, name in ipairs(names) do
         defs[i] = {
@@ -162,7 +168,18 @@ local function collect_definitions(grammar)
             end
         end
     end
-    return defs, nfa_defs, rank, fragments
+    local delimited_ids = {}
+    for _, name in ipairs(tables) do
+        local id = #defs + 1
+        defs[id] = {
+            id = id,
+            kind = 'delimited',
+            name = name,
+            segments = pair('tokens', name),
+        }
+        delimited_ids[name] = id
+    end
+    return defs, nfa_defs, rank, fragments, delimited_ids
 end
 
 --- check_recursion adds fragment_recursion for each cycle of fragment
@@ -178,52 +195,6 @@ local function check_recursion(diagnostics, fragments)
                       concat(cycle, ' -> ') .. ' -> ' .. cycle[1])
     end
     return #cycles > 0
-end
-
---- examples returns a function that gives the shortest string reaching a
---- DFA state, found breadth-first from state 1 over classes in ascending
---- order, using the smallest byte of each class.
---- @param d table
---- @return function(s) string
-local function examples(d)
-    local rep = {}
-    for b = 0, 255 do
-        local c = d.classes[b + 1]
-        if rep[c] == nil then
-            rep[c] = b
-        end
-    end
-    local parent, via = {
-        [1] = 0,
-    }, {}
-    local queue = {
-        1,
-    }
-    local head = 1
-    while queue[head] do
-        local s = queue[head]
-        for c = 1, d.nclasses do
-            local t = d.trans[(s - 1) * d.nclasses + c]
-            if t ~= 0 and parent[t] == nil then
-                parent[t] = s
-                via[t] = rep[c]
-                queue[#queue + 1] = t
-            end
-        end
-        head = head + 1
-    end
-    return function(s)
-        local bytes = {}
-        while s ~= 1 do
-            bytes[#bytes + 1] = via[s]
-            s = parent[s]
-        end
-        local out = {}
-        for i = #bytes, 1, -1 do
-            out[#out + 1] = char(bytes[i])
-        end
-        return concat(out)
-    end
 end
 
 --- check_conflicts adds empty_match, token_conflict and literal_conflict
@@ -242,7 +213,7 @@ local function check_conflicts(diagnostics, defs, d)
         end
     end
 
-    local example = examples(d)
+    local example = delimited.examples(d)
     local seen = {}
     -- state 1 would give an empty example; empty_match covers it
     for s = 2, d.nstates do
@@ -301,13 +272,49 @@ local function too_large(diagnostics, err)
     return nil, diagnostics
 end
 
+--- build_delimited checks and compiles the delimited token tables. It
+--- returns { open, tokens }, or nil and an automaton_too_large error.
+--- @param grammar table
+--- @param defs table[]
+--- @param ids table delimited token name -> id
+--- @param fragments table
+--- @param diagnostics table[]
+--- @return table? delimited { open, tokens }
+--- @return table? err
+local function build_delimited(grammar, defs, ids, fragments, diagnostics)
+    local tokens = rawget(grammar, 'tokens')
+    local entries, compiled = {}, {}
+    for _, def in ipairs(defs) do
+        if def.kind == 'delimited' then
+            local entry, err = delimited.analyze(def.name,
+                                                 rawget(tokens, def.name),
+                                                 fragments, diagnostics)
+            if err then
+                return nil, err
+            elseif entry then
+                entries[#entries + 1] = entry
+                compiled[def.id] = entry.token
+            end
+        end
+    end
+    local open, err = delimited.build_open(entries, ids, fragments, diagnostics)
+    if not open then
+        return nil, err
+    end
+    return {
+        open = open,
+        tokens = compiled,
+    }
+end
+
 --- build builds the token automaton of grammar.
 --- @param grammar table a grammar that passed the earlier checks
---- @return table? result { defs, dfa }, nil when there is an error
+--- @return table? result { defs, dfa, delimited }, nil when there is an
+--- error
 --- @return table[] diagnostics { severity, code, segments, pos, message }
 local function build(grammar)
     local diagnostics = {}
-    local defs, nfa_defs, rank, fragments = collect_definitions(grammar)
+    local defs, nfa_defs, rank, fragments, ids = collect_definitions(grammar)
     if check_recursion(diagnostics, fragments) then
         return nil, diagnostics
     end
@@ -322,13 +329,20 @@ local function build(grammar)
         return too_large(diagnostics, err)
     end
 
-    if check_conflicts(diagnostics, defs, d) then
+    local compiled
+    compiled, err = build_delimited(grammar, defs, ids, fragments, diagnostics)
+    if not compiled then
+        return too_large(diagnostics, err)
+    end
+
+    if check_conflicts(diagnostics, defs, d) or #diagnostics > 0 then
         return nil, diagnostics
     end
     check_adoption(diagnostics, defs, d)
     return {
         defs = defs,
         dfa = d,
+        delimited = compiled,
     }, diagnostics
 end
 
