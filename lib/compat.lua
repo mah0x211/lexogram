@@ -166,6 +166,7 @@ local function sorted_pairs(tbl)
 end
 
 return {
+    byte_less = byte_less,
     unpack = unpack,
     load_text = load_text,
     sorted_keys = sorted_keys,

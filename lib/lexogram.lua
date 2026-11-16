@@ -20,6 +20,13 @@
 -- THE SOFTWARE.
 --
 -- lexogram: public entry point of the lexogram library.
--- This module is intentionally empty for now; the public API will be
--- added by later units.
-return {}
+-- load(pathname) loads a grammar file (see lexogram.loader) and
+-- check(grammar) returns the diagnostics of a grammar table (see
+-- lexogram.check).
+local loader = require('lexogram.loader')
+local check = require('lexogram.check')
+
+return {
+    load = loader.load,
+    check = check.check,
+}

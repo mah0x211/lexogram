@@ -1463,3 +1463,202 @@ function testcase.rules_returns_shared_errors()
         },
     }, 'rules')
 end
+
+-- captures
+
+local function capture(pos, name)
+    return {
+        type = 'capture',
+        pos = pos,
+        name = name,
+    }
+end
+
+local CAPTURES = {
+    level = true,
+    body = 1,
+}
+
+-- parse src in the tokens context with captures and return the AST
+local function parse_captures(src, captures)
+    local ast, err = pattern.parse(src, 'tokens', captures or CAPTURES)
+    assert.is_nil(err)
+    return ast
+end
+
+-- parse src in the tokens context with captures and return the error
+local function parse_captures_err(src, captures)
+    local ast, err = pattern.parse(src, 'tokens', captures or CAPTURES)
+    assert.is_nil(ast)
+    return err
+end
+
+function testcase.parse_resolves_capture_names()
+    assert.equal(parse_captures('level'), capture(1, 'level'))
+    assert.equal(parse_captures('  body'), capture(3, 'body'))
+    assert.equal(parse_captures('"--[" level "["'), seq({
+        lit(1, '--['),
+        capture(7, 'level'),
+        lit(13, '['),
+    }))
+    assert.equal(parse_captures('level*'), postfix('star', capture(1, 'level')))
+    assert.equal(parse_captures('"a" (level | "b")?'), seq({
+        lit(1, 'a'),
+        postfix('opt', choice({
+            capture(6, 'level'),
+            lit(14, 'b'),
+        })),
+    }))
+end
+
+function testcase.parse_keeps_fragments_and_builtins_with_captures()
+    assert.equal(parse_captures('_frag DIGIT level'), seq({
+        ref(1, '_frag'),
+        cls(7, 'byte', {
+            {
+                48,
+                57,
+            },
+        }),
+        capture(13, 'level'),
+    }))
+    -- names of builtin or fragment shape never resolve to captures
+    assert.equal(parse_captures('_level', {
+        _level = true,
+    }), ref(1, '_level'))
+    assert.equal(parse_captures_err('LEVEL', {
+        LEVEL = true,
+    }), {
+        pos = 1,
+        code = 'unknown_builtin',
+        message = 'unknown builtin class: LEVEL',
+    })
+end
+
+function testcase.parse_rejects_names_that_are_not_captures()
+    local message = 'only fragment names (starting with "_") and capture' ..
+                        ' names may be referenced: '
+    assert.equal(parse_captures_err('level other'), {
+        pos = 7,
+        code = 'invalid_reference',
+        message = message .. 'other',
+    })
+    -- an empty captures table changes only the message
+    assert.equal(parse_captures_err('level', {}), {
+        pos = 1,
+        code = 'invalid_reference',
+        message = message .. 'level',
+    })
+    -- a false value is not a capture
+    assert.equal(parse_captures_err('level', {
+        level = false,
+    }), {
+        pos = 1,
+        code = 'invalid_reference',
+        message = message .. 'level',
+    })
+    -- without captures the message is unchanged
+    local ast, err = pattern.parse('level', 'tokens')
+    assert.is_nil(ast)
+    assert.equal(err, {
+        pos = 1,
+        code = 'invalid_reference',
+        message = 'only fragment names (starting with "_") may be referenced: level',
+    })
+end
+
+function testcase.parse_reads_captures_without_metamethods()
+    local captures = setmetatable({
+        level = true,
+    }, {
+        __index = function()
+            error('__index must not be called')
+        end,
+    })
+
+    assert.equal(parse_captures('level', captures), capture(1, 'level'))
+    assert.equal(parse_captures_err('other', captures).code, 'invalid_reference')
+end
+
+function testcase.parse_raises_for_invalid_captures()
+    local err = assert.throws(pattern.parse, 'level', 'tokens', 'level')
+    assert.match(err, 'captures must be table, got string')
+
+    err = assert.throws(pattern.parse, 'level', 'tokens', false)
+    assert.match(err, 'captures must be table, got boolean')
+
+    err = assert.throws(pattern.parse, 'a', 'rules', {})
+    assert.match(err, 'captures are only allowed in the tokens context')
+
+    -- nil means no captures in both contexts
+    assert.equal(parse_ok('a', 'rules'), ref(1, 'a'))
+    local ast = pattern.parse('a', 'rules', nil)
+    assert.equal(ast, ref(1, 'a'))
+end
+
+-- nesting limit
+
+local function nested(depth, inner)
+    return string.rep('(', depth) .. inner .. string.rep(')', depth)
+end
+
+function testcase.parse_accepts_100_nested_groups()
+    assert.equal(parse_ok(nested(100, '"a"')), lit(101, 'a'))
+    assert.equal(parse_ok(nested(100, 'a'), 'rules'), ref(101, 'a'))
+    -- the depth returns to zero after a group is closed
+    assert.equal(parse_ok(nested(100, '"a"') .. ' ' .. nested(100, '"b"')),
+                 seq({
+        lit(101, 'a'),
+        lit(305, 'b'),
+    }))
+end
+
+function testcase.parse_returns_nesting_too_deep()
+    check_errors({
+        {
+            nested(101, '"a"'),
+            101,
+            'nesting_too_deep',
+        },
+        {
+            '"x" ' .. nested(101, '"a"'),
+            105,
+            'nesting_too_deep',
+        },
+        -- the nesting error is found before a later syntax error
+        {
+            string.rep('(', 101) .. '"a" @ ""',
+            101,
+            'nesting_too_deep',
+        },
+    })
+    check_errors({
+        {
+            nested(101, 'a'),
+            101,
+            'nesting_too_deep',
+        },
+    }, 'rules')
+
+    local ast, err = pattern.parse(nested(101, '"a"'), 'tokens')
+    assert.is_nil(ast)
+    assert.equal(err.message, 'groups are nested deeper than 100 levels')
+end
+
+function testcase.parse_returns_error_for_very_deep_nesting()
+    for _, context in ipairs({
+        'tokens',
+        'rules',
+    }) do
+        local ok, ast, err = pcall(pattern.parse, string.rep('(', 100000),
+                                   context)
+
+        assert.is_true(ok)
+        assert.is_nil(ast)
+        assert.equal(err, {
+            pos = 101,
+            code = 'nesting_too_deep',
+            message = 'groups are nested deeper than 100 levels',
+        })
+    end
+end
