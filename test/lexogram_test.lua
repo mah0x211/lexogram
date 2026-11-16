@@ -3,6 +3,7 @@ local assert = require('assert')
 local lexogram = require('lexogram')
 local loader = require('lexogram.loader')
 local check = require('lexogram.check')
+local compile = require('lexogram.compile')
 
 -- the testcase runner executes a test file with its own directory as the
 -- working directory, so the repository root is one level up
@@ -73,4 +74,8 @@ function testcase.check_returns_diagnostics_of_loaded_grammar()
             message = 'unknown field name',
         },
     })
+end
+
+function testcase.compile_is_the_compile_function()
+    assert.rawequal(lexogram.compile, compile.compile)
 end

@@ -22,11 +22,14 @@
 -- lexogram: public entry point of the lexogram library.
 -- load(pathname) loads a grammar file (see lexogram.loader) and
 -- check(grammar) returns the diagnostics of a grammar table (see
--- lexogram.check).
+-- lexogram.check) and compile(grammar) compiles it into plain data (see
+-- lexogram.compile).
 local loader = require('lexogram.loader')
 local check = require('lexogram.check')
+local compile = require('lexogram.compile')
 
 return {
     load = loader.load,
     check = check.check,
+    compile = compile.compile,
 }

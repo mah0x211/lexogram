@@ -19,19 +19,20 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 -- THE SOFTWARE.
 --
---
 -- lexogram.check: checks a grammar table and returns diagnostics. It never
 -- raises for any input and reads tables only with raw access (next, rawget),
 -- so metamethods are never triggered. The checks are organized as passes
 -- over a shared context; each pass appends diagnostics, which are sorted
--- into a deterministic order at the end.
+-- into a deterministic order at the end. The passes are: structure (field
+-- shapes), names (definitions and plain references), patterns (parsing,
+-- references, literals and usage warnings) and lexical (the token
+-- automaton, run only when the earlier passes found no error).
 local type = type
 local next = next
 local rawget = rawget
 local ipairs = ipairs
 local byte = string.byte
 local char = string.char
-local sub = string.sub
 local find = string.find
 local gsub = string.gsub
 local format = string.format
@@ -40,6 +41,10 @@ local sort = table.sort
 local floor = math.floor
 local byte_less = require('lexogram.compat').byte_less
 local resolve_version = require('lexogram.version').resolve
+local text = require('lexogram.text')
+local escape_key = text.escape
+local quote = text.quote
+local build_lexer = require('lexogram.compile.lexer').build
 local parse_pattern = require('lexogram.pattern').parse
 
 -- Name patterns. They mirror lexogram.pattern: a name is what its scanner
@@ -87,33 +92,6 @@ local REQUIRED_FIELDS = {
 --- @return boolean
 local function is_integral_key(k)
     return k == floor(k) and k >= -INTEGER_LIMIT and k < INTEGER_LIMIT
-end
-
---- escape_key returns the string key s escaped for a ["..."] segment.
---- Backslash and double quote are escaped with a backslash; bytes below
---- 32, 127 and bytes 128 or above are written as \ddd.
---- @param s string
---- @return string
-local function escape_key(s)
-    local parts = {}
-    -- plain bytes are copied in runs; run is the start of the current run
-    local run = 1
-    for i = 1, #s do
-        local b = byte(s, i)
-        local esc
-        if b == 92 or b == 34 then
-            esc = '\\' .. sub(s, i, i)
-        elseif b < 32 or b >= 127 then
-            esc = format('\\%03d', b)
-        end
-        if esc then
-            parts[#parts + 1] = sub(s, run, i - 1)
-            parts[#parts + 1] = esc
-            run = i + 1
-        end
-    end
-    parts[#parts + 1] = sub(s, run)
-    return concat(parts)
 end
 
 --- key_segment returns the path segment string of key k.
@@ -656,13 +634,6 @@ end
 
 -- names pass
 
---- quote returns the string s in double quotes, escaped like a path key.
---- @param s string
---- @return string
-local function quote(s)
-    return '"' .. escape_key(s) .. '"'
-end
-
 --- table_field returns the field name of grammar if it is a table, or nil.
 --- @param grammar table
 --- @param name string
@@ -728,7 +699,8 @@ local function define(kinds, name, kind)
     set[kind] = true
 end
 
---- collect_tokens checks the names of tokens and records their kinds.
+--- collect_tokens checks the names of tokens and records their kinds. A
+--- delimited token table whose name starts with "_" is invalid_name.
 --- @param ctx table
 --- @param tokens table
 --- @param kinds table
@@ -737,7 +709,17 @@ local function collect_tokens(ctx, tokens, kinds)
         if type(k) == 'string' then
             local segs = child(ctx.tokens_segments, k)
             check_name_shape(ctx, segs, k)
-            define(kinds, k, byte(k, 1) == UNDERSCORE and 'fragment' or 'token')
+            local kind = byte(k, 1) == UNDERSCORE and 'fragment' or 'token'
+            if kind == 'fragment' and type(v) == 'table' then
+                -- a delimited token table is never a fragment; it is
+                -- registered as a token so that a reference to it from a
+                -- token pattern is reported as not a fragment
+                add_error(ctx, 'invalid_name', segs,
+                          label(segs) .. ': a delimited token table cannot be a' ..
+                              ' fragment (its name must not start with "_")')
+                kind = 'token'
+            end
+            define(kinds, k, kind)
             if type(v) == 'table' then
                 check_captures(ctx, segs, v)
             end
@@ -1243,11 +1225,28 @@ local function check_patterns(ctx)
     warn_unreachable_rules(ctx, rules, usage)
 end
 
+-- lexical pass
+
+--- check_lexical builds the token automaton and adds its diagnostics. It
+--- runs only for a grammar without errors, which lexogram.compile.lexer
+--- requires.
+--- @param ctx table
+local function check_lexical(ctx)
+    if has_error(ctx) then
+        return
+    end
+    local _, diagnostics = build_lexer(ctx.grammar)
+    for _, d in ipairs(diagnostics) do
+        add(ctx, d.severity, d.code, d.segments, d.pos, d.message)
+    end
+end
+
 -- Passes run in order over the shared context of a grammar table.
 local PASSES = {
     check_structure,
     check_names,
     check_patterns,
+    check_lexical,
 }
 
 --- check checks grammar and returns its diagnostics, sorted. It never
