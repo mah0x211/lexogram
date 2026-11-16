@@ -24,6 +24,7 @@ build = {
         ["lexogram.compile.dfa"] = "lib/compile/dfa.lua",
         ["lexogram.compile.lexer"] = "lib/compile/lexer.lua",
         ["lexogram.compile.limits"] = "lib/compile/limits.lua",
+        ["lexogram.compile.ll"] = "lib/compile/ll.lua",
         ["lexogram.compile.nfa"] = "lib/compile/nfa.lua",
         ["lexogram.compile.utf8range"] = "lib/compile/utf8range.lua",
         ["lexogram.loader"] = "lib/loader.lua",
