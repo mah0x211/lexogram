@@ -21,7 +21,10 @@
 --
 -- lexogram.pattern: parses a pattern DSL string into an AST. The source is
 -- scanned byte by byte with string.byte; pattern errors are returned as
--- { pos, code, message } tables and argument errors are raised.
+-- { pos, code, message } tables and argument errors are raised. The 'tokens'
+-- context allows character classes, builtin classes and fragment references;
+-- the 'rules' context allows references to any non-reserved name and ordered
+-- choice instead.
 local type = type
 local error = error
 local pcall = pcall
@@ -633,6 +636,31 @@ local function resolve_tokens_name(name, pos)
     }
 end
 
+--- resolve_rules_name returns the reference node for a name in the rules
+--- context. All-uppercase names are reserved.
+--- @param name string
+--- @param pos integer
+--- @return table node
+local function resolve_rules_name(name, pos)
+    if find(name, '^[A-Z][A-Z0-9_]*$') then
+        fail(pos, 'reserved_name', 'all-uppercase names are reserved: ' .. name)
+    end
+    return {
+        type = 'ref',
+        pos = pos,
+        name = name,
+    }
+end
+
+--- reject_class rejects a character class in a context without classes.
+--- The class body is not scanned.
+--- @param _ table parser state
+--- @param pos integer position of the "["
+local function reject_class(_, pos)
+    fail(pos, 'class_not_allowed',
+         'character class is not allowed in this context')
+end
+
 --- reject_ordered_choice rejects "/" in a context without ordered choice.
 --- @param _ table parser state
 --- @param pos integer
@@ -641,12 +669,25 @@ local function reject_ordered_choice(_, pos)
          'ordered choice "/" is not allowed in this context')
 end
 
--- Context dependent behavior. Each context defines how names resolve and how
--- "/" is handled.
+--- accept_ordered_choice makes "/" the current token.
+--- @param p table parser state
+--- @param pos integer
+local function accept_ordered_choice(p, pos)
+    p.kind, p.pos = '/', pos + 1
+end
+
+-- Context dependent behavior. Each context defines how names resolve, how a
+-- class ("[") is handled and how "/" is handled.
 local CONTEXTS = {
     tokens = {
         resolve_name = resolve_tokens_name,
+        scan_class = scan_class,
         on_slash = reject_ordered_choice,
+    },
+    rules = {
+        resolve_name = resolve_rules_name,
+        scan_class = reject_class,
+        on_slash = accept_ordered_choice,
     },
 }
 
@@ -692,7 +733,7 @@ local function advance(p)
     elseif b == DQUOTE then
         p.kind, p.node = PRIMARY, scan_literal(p, i)
     elseif b == LBRACKET then
-        p.kind, p.node = PRIMARY, scan_class(p, i)
+        p.kind, p.node = PRIMARY, p.context.scan_class(p, i)
     elseif is_name_start(b) then
         p.kind, p.node = PRIMARY, scan_name(p, i)
     elseif SYMBOLS[b] then
@@ -705,6 +746,12 @@ local function advance(p)
 end
 
 -- parser
+
+-- Choice separators and whether they make the choice ordered.
+local SEPARATORS = {
+    ['|'] = false,
+    ['/'] = true,
+}
 
 local parse_choice
 
@@ -785,24 +832,30 @@ local function parse_sequence(p)
     }
 end
 
---- parse_choice parses sequences separated by "|".
+--- parse_choice parses sequences separated by "|" or by "/". The first
+--- separator decides the kind of the choice; the other one is mixed_choice.
 --- @param p table parser state
 --- @return table node
 function parse_choice(p)
     local items = {
         parse_sequence(p),
     }
-    while p.kind == '|' do
+    local sep = p.kind
+    local ordered = SEPARATORS[sep]
+    if ordered == nil then
+        return items[1]
+    end
+    while SEPARATORS[p.kind] ~= nil do
+        if p.kind ~= sep then
+            fail(p.tpos, 'mixed_choice', 'choice mixes "|" and "/"')
+        end
         advance(p)
         items[#items + 1] = parse_sequence(p)
-    end
-    if #items == 1 then
-        return items[1]
     end
     return {
         type = 'choice',
         pos = items[1].pos,
-        ordered = false,
+        ordered = ordered,
         items = items,
     }
 end
@@ -824,7 +877,7 @@ end
 
 --- parse parses the pattern src in the given context.
 --- @param src string
---- @param context string 'tokens'
+--- @param context string 'tokens' or 'rules'
 --- @return table? ast
 --- @return table? err { pos, code, message }
 local function parse(src, context)

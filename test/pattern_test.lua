@@ -46,6 +46,15 @@ local function choice(items)
     }
 end
 
+local function ordered_choice(items)
+    return {
+        type = 'choice',
+        pos = items[1].pos,
+        ordered = true,
+        items = items,
+    }
+end
+
 local function postfix(t, item)
     return {
         type = t,
@@ -54,16 +63,17 @@ local function postfix(t, item)
     }
 end
 
--- parse src in the tokens context and return the AST
-local function parse_ok(src)
-    local ast, err = pattern.parse(src, 'tokens')
+-- parse src in the context (default 'tokens') and return the AST
+local function parse_ok(src, context)
+    local ast, err = pattern.parse(src, context or 'tokens')
     assert.is_nil(err)
     return ast
 end
 
--- parse src in the tokens context and return the error without its message
-local function parse_err(src)
-    local ast, err = pattern.parse(src, 'tokens')
+-- parse src in the context (default 'tokens') and return the error without
+-- its message
+local function parse_err(src, context)
+    local ast, err = pattern.parse(src, context or 'tokens')
     assert.is_nil(ast)
     assert.is_string(err.message)
     assert.not_equal(err.message, '')
@@ -74,9 +84,9 @@ local function parse_err(src)
 end
 
 -- check that each case { src, pos, code } fails as expected
-local function check_errors(cases)
+local function check_errors(cases, context)
     for _, case in ipairs(cases) do
-        local err = parse_err(case[1])
+        local err = parse_err(case[1], context)
         assert.equal(err, {
             pos = case[2],
             code = case[3],
@@ -101,8 +111,11 @@ function testcase.parse_raises_for_invalid_context()
     err = assert.throws(pattern.parse, '"a"', {})
     assert.match(err, 'context must be string, got table')
 
-    err = assert.throws(pattern.parse, '"a"', 'rules')
-    assert.match(err, 'unsupported context: rules')
+    err = assert.throws(pattern.parse, '"a"', 'grammar')
+    assert.match(err, 'unsupported context: grammar')
+
+    err = assert.throws(pattern.parse, '"a"', 'TOKENS')
+    assert.match(err, 'unsupported context: TOKENS')
 end
 
 -- literal
@@ -1185,4 +1198,268 @@ function testcase.parse_reports_first_error_from_left()
             'missing_operand',
         },
     })
+end
+
+-- rules context
+
+function testcase.parse_accepts_both_contexts()
+    assert.equal(parse_ok('"a"', 'tokens'), lit(1, 'a'))
+    assert.equal(parse_ok('"a"', 'rules'), lit(1, 'a'))
+end
+
+function testcase.rules_returns_reference_for_each_name_shape()
+    for _, case in ipairs({
+        {
+            'ident',
+            1,
+        },
+        {
+            'Foo',
+            1,
+        },
+        {
+            'aBC',
+            1,
+        },
+        {
+            'foo_BAR9',
+            1,
+        },
+        {
+            '_operand',
+            1,
+        },
+        {
+            '_',
+            1,
+        },
+        {
+            '_ABC',
+            1,
+        },
+        {
+            '  expr',
+            3,
+        },
+    }) do
+        local name = case[1]:match('^%s*(.*)$')
+        assert.equal(parse_ok(case[1], 'rules'), ref(case[2], name))
+    end
+end
+
+function testcase.rules_parses_literals_as_in_tokens()
+    assert.equal(parse_ok('"[a-z]" "\\u{41}\\n"', 'rules'), seq({
+        lit(1, '[a-z]'),
+        lit(9, 'A\n'),
+    }))
+end
+
+function testcase.rules_returns_reserved_name()
+    check_errors({
+        {
+            'DIGIT',
+            1,
+            'reserved_name',
+        },
+        {
+            'ANY',
+            1,
+            'reserved_name',
+        },
+        {
+            'FOO',
+            1,
+            'reserved_name',
+        },
+        {
+            'A1_',
+            1,
+            'reserved_name',
+        },
+        {
+            'expr  NUM',
+            7,
+            'reserved_name',
+        },
+    }, 'rules')
+end
+
+function testcase.rules_returns_class_not_allowed()
+    check_errors({
+        {
+            '[a-z]',
+            1,
+            'class_not_allowed',
+        },
+        {
+            'a "b" [',
+            7,
+            'class_not_allowed',
+        },
+        -- the class body is not scanned, so its own errors do not show
+        {
+            'a [',
+            3,
+            'class_not_allowed',
+        },
+        {
+            '[]',
+            1,
+            'class_not_allowed',
+        },
+        {
+            'a | ([^\\q])',
+            6,
+            'class_not_allowed',
+        },
+    }, 'rules')
+end
+
+function testcase.rules_returns_ordered_choice()
+    assert.equal(parse_ok('a / b', 'rules'), ordered_choice({
+        ref(1, 'a'),
+        ref(5, 'b'),
+    }))
+    assert.equal(parse_ok('a/"b" / _c', 'rules'), ordered_choice({
+        ref(1, 'a'),
+        lit(3, 'b'),
+        ref(9, '_c'),
+    }))
+    assert.equal(parse_ok('a | b | c', 'rules'), choice({
+        ref(1, 'a'),
+        ref(5, 'b'),
+        ref(9, 'c'),
+    }))
+end
+
+function testcase.rules_returns_mixed_choice()
+    check_errors({
+        {
+            '"a" | "b" / "c"',
+            11,
+            'mixed_choice',
+        },
+        {
+            'a / b | c',
+            7,
+            'mixed_choice',
+        },
+        {
+            'a | b | c / d',
+            11,
+            'mixed_choice',
+        },
+        {
+            '(a / b | c)',
+            8,
+            'mixed_choice',
+        },
+    }, 'rules')
+end
+
+function testcase.rules_allows_mixing_through_groups()
+    assert.equal(parse_ok('("a" | "b") / "c"', 'rules'), ordered_choice({
+        choice({
+            lit(2, 'a'),
+            lit(8, 'b'),
+        }),
+        lit(15, 'c'),
+    }))
+    assert.equal(parse_ok('"a" | ("b" / "c")', 'rules'), choice({
+        lit(1, 'a'),
+        ordered_choice({
+            lit(8, 'b'),
+            lit(14, 'c'),
+        }),
+    }))
+end
+
+function testcase.rules_applies_precedence()
+    assert.equal(parse_ok('a b* / c', 'rules'), ordered_choice({
+        seq({
+            ref(1, 'a'),
+            postfix('star', ref(3, 'b')),
+        }),
+        ref(8, 'c'),
+    }))
+    assert.equal(parse_ok('a / b+ c?', 'rules'), ordered_choice({
+        ref(1, 'a'),
+        seq({
+            postfix('plus', ref(5, 'b')),
+            postfix('opt', ref(8, 'c')),
+        }),
+    }))
+end
+
+function testcase.rules_parses_realistic_rule()
+    assert.equal(parse_ok('unop* _operand (binop unop* _operand)*', 'rules'),
+                 seq({
+        postfix('star', ref(1, 'unop')),
+        ref(7, '_operand'),
+        postfix('star', seq({
+            ref(17, 'binop'),
+            postfix('star', ref(23, 'unop')),
+            ref(29, '_operand'),
+        })),
+    }))
+end
+
+function testcase.rules_returns_shared_errors()
+    check_errors({
+        {
+            '',
+            1,
+            'missing_operand',
+        },
+        {
+            '"a" /',
+            6,
+            'missing_operand',
+        },
+        {
+            '/ "a"',
+            1,
+            'missing_operand',
+        },
+        {
+            '"a" // "b"',
+            6,
+            'missing_operand',
+        },
+        {
+            'a | / b',
+            5,
+            'missing_operand',
+        },
+        {
+            '(a / b',
+            1,
+            'unbalanced_paren',
+        },
+        {
+            'a / b)',
+            6,
+            'unbalanced_paren',
+        },
+        {
+            'a*+',
+            3,
+            'repeated_postfix',
+        },
+        {
+            'a / ""',
+            5,
+            'empty_literal',
+        },
+        {
+            'a @',
+            3,
+            'unexpected_char',
+        },
+        {
+            '"\\q"',
+            2,
+            'invalid_escape',
+        },
+    }, 'rules')
 end
