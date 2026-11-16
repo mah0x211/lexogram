@@ -30,14 +30,17 @@ local next = next
 local rawget = rawget
 local ipairs = ipairs
 local byte = string.byte
+local char = string.char
 local sub = string.sub
 local find = string.find
+local gsub = string.gsub
 local format = string.format
 local concat = table.concat
 local sort = table.sort
 local floor = math.floor
 local byte_less = require('lexogram.compat').byte_less
 local resolve_version = require('lexogram.version').resolve
+local parse_pattern = require('lexogram.pattern').parse
 
 -- Name patterns. They mirror lexogram.pattern: a name is what its scanner
 -- accepts as a name, and an all-uppercase name is a builtin class there.
@@ -856,11 +859,395 @@ local function check_names(ctx)
     check_reference_list(ctx, 'recover', 'rule')
 end
 
--- Passes run in order over the shared context of a grammar table. Later
--- passes (pattern checks) are appended here.
+-- patterns pass
+
+-- ASCII case folding table: "A".."Z" to "a".."z". The [A-Z] range of a Lua
+-- pattern compares byte values, so folding does not depend on the locale.
+local FOLD = {}
+for b = 65, 90 do
+    FOLD[char(b)] = char(b + 32)
+end
+
+--- fold returns s with ASCII upper case letters folded to lower case.
+--- @param s string
+--- @return string
+local function fold(s)
+    return (gsub(s, '[A-Z]', FOLD))
+end
+
+--- walk calls visit for node and every node below it, depth first.
+--- @param node table
+--- @param visit function(node)
+local function walk(node, visit)
+    visit(node)
+    local items = node.items
+    if items then
+        for i = 1, #items do
+            walk(items[i], visit)
+        end
+    elseif node.item then
+        walk(node.item, visit)
+    end
+end
+
+--- parse_at parses the pattern src at segments. A pattern error is added as
+--- an error diagnostic; a parsed pattern is appended to ctx.patterns.
+--- @param ctx table
+--- @param segments any[]
+--- @param src string
+--- @param context string 'tokens' or 'rules'
+--- @param captures table? capture names
+--- @param rule string? the rule that owns a rule pattern
+local function parse_at(ctx, segments, src, context, captures, rule)
+    local ast, err = parse_pattern(src, context, captures)
+    if not ast then
+        add(ctx, 'error', err.code, segments, err.pos, err.message)
+        return
+    end
+    local list = ctx.patterns
+    list[#list + 1] = {
+        segments = segments,
+        ast = ast,
+        rule = rule,
+    }
+end
+
+--- parse_delimited parses the open, close and capture definition patterns
+--- of a delimited token table.
+--- @param ctx table
+--- @param segments any[]
+--- @param tbl table
+local function parse_delimited(ctx, segments, tbl)
+    local captures = {}
+    for k in next, tbl do
+        if type(k) == 'string' and k ~= 'open' and k ~= 'close' then
+            captures[k] = true
+        end
+    end
+    for k, v in next, tbl do
+        if type(k) == 'string' and type(v) == 'string' then
+            local names = nil
+            if k == 'open' or k == 'close' then
+                names = captures
+            end
+            parse_at(ctx, child(segments, k), v, 'tokens', names)
+        end
+    end
+end
+
+--- parse_all parses every pattern of tokens and rules.
+--- @param ctx table
+--- @param tokens table?
+--- @param rules table?
+local function parse_all(ctx, tokens, rules)
+    ctx.patterns = {}
+    ctx.rule_patterns = {}
+    for k, v in next, tokens or ROOT do
+        if type(k) == 'string' then
+            local segs = child(ctx.tokens_segments, k)
+            if type(v) == 'string' then
+                parse_at(ctx, segs, v, 'tokens')
+            elseif type(v) == 'table' then
+                parse_delimited(ctx, segs, v)
+            end
+        end
+    end
+    for k, v in next, rules or ROOT do
+        if type(k) == 'string' and type(v) == 'string' then
+            parse_at(ctx, child(ctx.rules_segments, k), v, 'rules', nil, k)
+        end
+    end
+end
+
+--- collect_literals returns the declared items of symbols and keywords as
+--- a list of { segments, value, ignore_case }, or nil if the literal check
+--- must be skipped because either field has the wrong type.
+--- @param grammar table
+--- @return table[]?
+local function collect_literals(grammar)
+    local items = {}
+    for _, name in ipairs({
+        'symbols',
+        'keywords',
+    }) do
+        local tbl = rawget(grammar, name)
+        if type(tbl) == 'table' then
+            local ignore_case = rawget(tbl, 'ignore_case') == true
+            for i = 1, array_length(tbl) do
+                local v = rawget(tbl, i)
+                if type(v) == 'string' and v ~= '' then
+                    items[#items + 1] = {
+                        segments = {
+                            name,
+                            i,
+                        },
+                        value = v,
+                        ignore_case = ignore_case,
+                    }
+                end
+            end
+        elseif tbl ~= nil then
+            return nil
+        end
+    end
+    return items
+end
+
+--- new_declarations returns the lookup sets of the declared items.
+--- @param items table[] result of collect_literals
+--- @return table { exact, folded }
+local function new_declarations(items)
+    local exact, folded = {}, {}
+    for _, item in ipairs(items) do
+        exact[item.value] = true
+        if item.ignore_case then
+            folded[fold(item.value)] = true
+        end
+    end
+    return {
+        exact = exact,
+        folded = folded,
+    }
+end
+
+--- add_pattern_error adds an error at the position of node in a pattern.
+--- @param ctx table
+--- @param entry table parsed pattern
+--- @param node table
+--- @param code string
+--- @param message string
+local function add_pattern_error(ctx, entry, node, code, message)
+    add(ctx, 'error', code, entry.segments, node.pos,
+        label(entry.segments) .. message)
+end
+
+--- check_pattern_ref checks a ref node of a pattern: the referenced name
+--- must be defined with one of the accepted kinds.
+--- @param ctx table
+--- @param entry table parsed pattern
+--- @param node table ref node
+--- @param accepted table set of accepted kinds
+--- @param expected string description of the accepted kinds
+local function check_pattern_ref(ctx, entry, node, accepted, expected)
+    local set = ctx.kinds[node.name]
+    if not set then
+        add_pattern_error(ctx, entry, node, 'undefined_reference',
+                          ' refers to undefined ' .. expected .. ' ' ..
+                              quote(node.name))
+        return
+    end
+    for kind in next, set do
+        if accepted[kind] then
+            return
+        end
+    end
+    add_pattern_error(ctx, entry, node, 'invalid_reference',
+                      ' refers to ' .. quote(node.name) .. ', which is ' ..
+                          describe_kinds(set) .. ', not a ' .. expected)
+end
+
+-- Kinds a token pattern and a rule pattern may refer to.
+local TOKEN_REFS = {
+    fragment = true,
+}
+local RULE_REFS = {
+    token = true,
+    rule = true,
+}
+
+--- visit_token_pattern records the fragments used by a token pattern and
+--- checks its references.
+--- @param ctx table
+--- @param entry table parsed pattern
+--- @param usage table
+local function visit_token_pattern(ctx, entry, usage)
+    walk(entry.ast, function(node)
+        if node.type == 'ref' then
+            usage.fragments[node.name] = true
+            check_pattern_ref(ctx, entry, node, TOKEN_REFS, 'fragment')
+        end
+    end)
+end
+
+--- visit_rule_pattern records the names and literals used by a rule
+--- pattern and checks its references and, unless usage.declarations is
+--- nil, its literals.
+--- @param ctx table
+--- @param entry table parsed pattern
+--- @param usage table
+local function visit_rule_pattern(ctx, entry, usage)
+    local edges = usage.edges[entry.rule] or {}
+    usage.edges[entry.rule] = edges
+    local decl = usage.declarations
+    walk(entry.ast, function(node)
+        if node.type == 'ref' then
+            usage.names[node.name] = true
+            edges[#edges + 1] = node.name
+            check_pattern_ref(ctx, entry, node, RULE_REFS, 'token or rule')
+        elseif node.type == 'literal' then
+            local v = node.value
+            usage.literals[v] = true
+            usage.folded[fold(v)] = true
+            if decl and not decl.exact[v] and not decl.folded[fold(v)] then
+                add_pattern_error(ctx, entry, node, 'undeclared_literal',
+                                  ' refers to undeclared literal ' .. quote(v))
+            end
+        end
+    end)
+end
+
+--- reachable_rules returns the set of rules reachable from start through
+--- references in rule patterns. It is called only for a grammar without
+--- errors, so start is a string that names a rule.
+--- @param start string
+--- @param rules table
+--- @param edges table rule name -> referenced names
+--- @return table
+local function reachable_rules(start, rules, edges)
+    local seen = {}
+    local queue = {
+        start,
+    }
+    seen[start] = true
+    local head = 1
+    while queue[head] do
+        for _, name in ipairs(edges[queue[head]] or ROOT) do
+            if not seen[name] and rawget(rules, name) ~= nil then
+                seen[name] = true
+                queue[#queue + 1] = name
+            end
+        end
+        head = head + 1
+    end
+    return seen
+end
+
+--- has_error returns true if any error diagnostic has been added.
+--- @param ctx table
+--- @return boolean
+local function has_error(ctx)
+    for _, d in ipairs(ctx.diagnostics) do
+        if d.severity == 'error' then
+            return true
+        end
+    end
+    return false
+end
+
+--- add_warning appends a warning diagnostic without a position.
+--- @param ctx table
+--- @param code string
+--- @param segments any[]
+--- @param message string
+local function add_warning(ctx, code, segments, message)
+    add(ctx, 'warning', code, segments, nil, label(segments) .. message)
+end
+
+--- warn_unused_tokens reports unused tokens and fragments.
+--- @param ctx table
+--- @param tokens table
+--- @param usage table
+local function warn_unused_tokens(ctx, tokens, usage)
+    local skipped = {}
+    local skip = table_field(ctx.grammar, 'skip') or ROOT
+    for i = 1, array_length(skip) do
+        local v = rawget(skip, i)
+        if v ~= nil then
+            skipped[v] = true
+        end
+    end
+    -- warnings are only emitted without errors, so every key is a string
+    for k in next, tokens do
+        local segs = child(ctx.tokens_segments, k)
+        if byte(k, 1) == UNDERSCORE then
+            if not usage.fragments[k] then
+                add_warning(ctx, 'unused_fragment', segs,
+                            ' is not used by any token pattern')
+            end
+        elseif not usage.names[k] and not skipped[k] then
+            add_warning(ctx, 'unused_token', segs,
+                        ' is not used by any rule and not listed in skip')
+        end
+    end
+end
+
+--- warn_unused_literals reports items of symbols and keywords that no rule
+--- literal matches.
+--- @param ctx table
+--- @param items table[] result of collect_literals
+--- @param usage table
+local function warn_unused_literals(ctx, items, usage)
+    for _, item in ipairs(items) do
+        local v = item.value
+        if not usage.literals[v] and
+            not (item.ignore_case and usage.folded[fold(v)]) then
+            add_warning(ctx, 'unused_literal', item.segments,
+                        ' ' .. quote(v) .. ' is not used by any rule')
+        end
+    end
+end
+
+--- warn_unreachable_rules reports rules not reachable from start.
+--- @param ctx table
+--- @param rules table
+--- @param usage table
+local function warn_unreachable_rules(ctx, rules, usage)
+    local start = rawget(ctx.grammar, 'start')
+    local seen = reachable_rules(start, rules, usage.edges)
+    for k in next, rules do
+        if not seen[k] then
+            add_warning(ctx, 'unreachable_rule', child(ctx.rules_segments, k),
+                        ' is not reachable from start')
+        end
+    end
+end
+
+--- check_patterns parses every pattern, checks the references and literals
+--- of the parsed patterns and, if the grammar has no error, reports unused
+--- definitions and unreachable rules. References and literals are checked
+--- only when both tokens and rules are tables.
+--- @param ctx table
+local function check_patterns(ctx)
+    local grammar = ctx.grammar
+    local tokens = table_field(grammar, 'tokens')
+    local rules = table_field(grammar, 'rules')
+    parse_all(ctx, tokens, rules)
+    if not tokens or not rules then
+        return
+    end
+
+    local items = collect_literals(grammar)
+    local usage = {
+        declarations = items and new_declarations(items),
+        fragments = {},
+        names = {},
+        literals = {},
+        folded = {},
+        edges = {},
+    }
+    for _, entry in ipairs(ctx.patterns) do
+        if entry.rule then
+            visit_rule_pattern(ctx, entry, usage)
+        else
+            visit_token_pattern(ctx, entry, usage)
+        end
+    end
+
+    if has_error(ctx) then
+        return
+    end
+    warn_unused_tokens(ctx, tokens, usage)
+    -- items is not nil here: a symbols or keywords field of the wrong type
+    -- is an error
+    warn_unused_literals(ctx, items, usage)
+    warn_unreachable_rules(ctx, rules, usage)
+end
+
+-- Passes run in order over the shared context of a grammar table.
 local PASSES = {
     check_structure,
     check_names,
+    check_patterns,
 }
 
 --- check checks grammar and returns its diagnostics, sorted. It never

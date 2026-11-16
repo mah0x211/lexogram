@@ -12,7 +12,7 @@ local function valid_grammar()
             comment = {
                 open = '"/*"',
                 close = '"*/"',
-                body = '_text',
+                body = '[^*]*',
             },
         },
         symbols = {
@@ -29,7 +29,7 @@ local function valid_grammar()
             'comment',
         },
         rules = {
-            expr = 'number',
+            expr = 'number (("+" / "-") number)* / "if" expr "else" expr',
         },
         greedy = {
             'expr',
@@ -45,6 +45,18 @@ local function grammar_with(fields)
     local grammar = valid_grammar()
     for k, v in pairs(fields) do
         grammar[k] = v
+    end
+    return grammar
+end
+
+-- grammar_with, with a rule that uses no token and no literal unless rules
+-- is given, so that a test of other fields sees no reference diagnostics
+local function isolated(fields)
+    local grammar = grammar_with(fields)
+    if fields.rules == nil then
+        grammar.rules = {
+            expr = 'expr',
+        }
     end
     return grammar
 end
@@ -67,7 +79,7 @@ function testcase.check_returns_empty_list_for_valid_grammar()
         start = 'expr',
         tokens = {},
         rules = {
-            expr = '"x"',
+            expr = 'expr',
         },
     }), {})
 end
@@ -187,7 +199,7 @@ end
 -- tokens
 
 function testcase.check_reports_token_problems()
-    assert.equal(check.check(grammar_with({
+    assert.equal(check.check(isolated({
         -- skip refers to the comment token, which these tokens replace
         skip = {},
         tokens = {
@@ -208,7 +220,7 @@ function testcase.check_reports_token_problems()
 end
 
 function testcase.check_reports_delimited_token_problems()
-    assert.equal(check.check(grammar_with({
+    assert.equal(check.check(isolated({
         skip = {},
         tokens = {
             no_open = {
@@ -222,7 +234,7 @@ function testcase.check_reports_delimited_token_problems()
                 open = 1,
                 close = {},
                 capture = 2,
-                text = '_text',
+                text = '[a-z]*',
                 [1] = '"x"',
             },
         },
@@ -281,7 +293,7 @@ function testcase.check_reports_item_array_key_problems()
         }
         tbl[{}] = 'x'
 
-        assert.equal(check.check(grammar_with({
+        assert.equal(check.check(isolated({
             symbols = {},
             keywords = {},
             [name] = tbl,
@@ -304,7 +316,7 @@ function testcase.check_reports_item_array_key_problems()
 end
 
 function testcase.check_reports_array_hole_for_every_key_beyond_count()
-    assert.equal(check.check(grammar_with({
+    assert.equal(check.check(isolated({
         symbols = {
             [2] = 'b',
             [3] = 'c',
@@ -313,7 +325,7 @@ function testcase.check_reports_array_hole_for_every_key_beyond_count()
         err('invalid_key', 'symbols[3]',
             'array has a hole: key symbols[3] is greater than the item count 2'),
     })
-    assert.equal(check.check(grammar_with({
+    assert.equal(check.check(isolated({
         symbols = {
             [5] = 'e',
             [9] = 'i',
@@ -331,7 +343,7 @@ function testcase.check_reports_item_problems()
         'symbols',
         'keywords',
     }) do
-        assert.equal(check.check(grammar_with({
+        assert.equal(check.check(isolated({
             symbols = {},
             keywords = {},
             [name] = {
@@ -366,7 +378,7 @@ function testcase.check_reports_item_settings_problems()
         'symbols',
         'keywords',
     }) do
-        assert.equal(check.check(grammar_with({
+        assert.equal(check.check(isolated({
             symbols = {},
             keywords = {},
             [name] = {
@@ -386,7 +398,7 @@ function testcase.check_reports_item_settings_problems()
 end
 
 function testcase.check_reports_keywords_duplicating_symbols()
-    assert.equal(check.check(grammar_with({
+    assert.equal(check.check(isolated({
         symbols = {
             '+',
             'and',
@@ -422,6 +434,7 @@ function testcase.check_skips_cross_duplicates_without_both_tables()
     })
     local grammar = valid_grammar()
     grammar.symbols = nil
+    grammar.rules.expr = 'number / "if" expr "else" expr'
     assert.equal(check.check(grammar), {})
 end
 
@@ -482,7 +495,7 @@ end
 
 function testcase.check_renders_escaped_string_keys()
     local key = 'a"b\\c' .. string.char(1, 31, 127, 128, 255) .. ' d'
-    assert.equal(check.check(grammar_with({
+    assert.equal(check.check(isolated({
         symbols = {
             [key] = 1,
             ['1abc'] = 1,
@@ -515,7 +528,7 @@ function testcase.check_renders_number_boolean_and_other_keys()
     tokens[print] = 'x'
 
     local paths = {}
-    for i, d in ipairs(check.check(grammar_with({
+    for i, d in ipairs(check.check(isolated({
         skip = {},
         tokens = tokens,
     }))) do
@@ -769,6 +782,7 @@ function testcase.check_does_not_trigger_metamethods()
     local bad = valid_grammar()
     bad.start = setmetatable({}, trap())
     bad.symbols[1] = setmetatable({}, trap())
+    bad.rules.expr = 'number "-" number'
     setmetatable(bad, trap())
     assert.equal(check.check(bad), {
         err('invalid_type', 'start', 'start must be string, got table'),
@@ -783,6 +797,7 @@ function testcase.check_handles_cyclic_tables()
     tokens.loop = tokens
     grammar.tokens = tokens
     grammar.skip = nil
+    grammar.rules.expr = 'expr'
     grammar.self = grammar
 
     assert.equal(check.check(grammar), {
@@ -837,6 +852,9 @@ local function names_grammar(fields)
         lexogram = '2026.11.15.1',
         start = 'expr',
         tokens = {},
+        symbols = {
+            'x',
+        },
         rules = {
             expr = '"x"',
         },
@@ -850,18 +868,19 @@ end
 function testcase.check_accepts_valid_names()
     assert.equal(check.check(names_grammar({
         tokens = {
-            a = '"a"',
+            a = '_a _ABC _',
             _a = '"b"',
             A1b = '"c"',
             _ABC = '"d"',
             _ = '"e"',
             aB_9 = '"f"',
         },
+        -- every definition is used, so there is no warning either
         rules = {
-            expr = 'a',
-            r_1 = 'expr',
-            _rule = 'expr',
-            Rule = 'expr',
+            expr = 'a A1b aB_9 r_1 _rule Rule "x"',
+            r_1 = 'a',
+            _rule = 'a',
+            Rule = 'a',
         },
     })), {})
 end
@@ -939,6 +958,14 @@ function testcase.check_reports_reserved_names()
                 'reserved (all-uppercase names are builtins)'),
         err('reserved_name', 'rules.EXPR',
             'rules.EXPR: "EXPR" is reserved (all-uppercase names are builtins)'),
+        -- the pattern of rules.expr cannot refer to a reserved name
+        {
+            severity = 'error',
+            code = 'reserved_name',
+            path = 'rules.expr',
+            pos = 1,
+            message = 'all-uppercase names are reserved: NUMBER',
+        },
     })
 end
 
@@ -976,14 +1003,14 @@ function testcase.check_reports_capture_names()
             str = {
                 open = '"\\""',
                 close = '"\\""',
-                body = '_text',
-                Body2 = '_text',
-                ['1x'] = '_text',
-                BODY = '_text',
-                _frag = '_text',
+                body = '[a-z]*',
+                Body2 = '[a-z]*',
+                ['1x'] = '[a-z]*',
+                BODY = '[a-z]*',
+                _frag = '[a-z]*',
                 -- capture names may coincide with token and rule names
-                x = '_text',
-                expr = '_text',
+                x = '[a-z]*',
+                expr = '[a-z]*',
             },
         },
     })), {
@@ -998,12 +1025,13 @@ function testcase.check_reports_capture_names()
 end
 
 function testcase.check_reports_start_references()
+    -- every definition is used, so the valid cases have no warning
     local rules = {
-        expr = '"x"',
+        expr = 'num _rule "x"',
         _rule = 'expr',
     }
     local tokens = {
-        num = '[0-9]+',
+        num = '_digits',
         _digits = '[0-9]+',
     }
     for _, case in ipairs({
@@ -1292,5 +1320,371 @@ function testcase.check_orders_structure_and_name_diagnostics()
             'rules.num: "num" is already defined at tokens.num'),
         err('invalid_type', 'rules.num', 'rules.num must be string, got number'),
         err('unknown_field', 'extra', 'unknown field extra'),
+    })
+end
+
+-- patterns pass
+
+-- a realistic valid grammar: every definition and literal is used
+local function lua_like_grammar()
+    return {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '(ALPHA | "_") (ALPHA | DIGIT | "_")*',
+            number = '_digits ("." _digits)?',
+            _digits = 'DIGIT+',
+            long_string = {
+                open = '"[" level "["',
+                close = '"]" level "]"',
+                level = '"="*',
+            },
+            space = '[ \\t\\r\\n]+',
+        },
+        symbols = {
+            '=',
+            ';',
+            '(',
+            ')',
+            ',',
+        },
+        keywords = {
+            'local',
+            'return',
+            'nil',
+            ignore_case = true,
+        },
+        skip = {
+            'space',
+        },
+        rules = {
+            chunk = 'stat* _last?',
+            stat = 'assign / call / ";"',
+            assign = '"local" name "=" expr',
+            call = 'name "(" args? ")"',
+            args = 'expr ("," expr)*',
+            _last = '"return" expr',
+            expr = 'number | long_string | name | "nil"',
+        },
+        greedy = {
+            'args',
+        },
+        recover = {
+            'stat',
+        },
+    }
+end
+
+-- lua_like_grammar with fields of tokens, rules, symbols and keywords
+-- replaced; a field value of false removes the field
+local function lua_like(changes)
+    local grammar = lua_like_grammar()
+    for field, values in pairs(changes) do
+        if type(values) ~= 'table' then
+            grammar[field] = values or nil
+        else
+            for k, v in pairs(values) do
+                grammar[field][k] = v or nil
+            end
+        end
+    end
+    return grammar
+end
+
+-- an expected diagnostic with a position
+local function at(code, path, pos, message)
+    return {
+        severity = 'error',
+        code = code,
+        path = path,
+        pos = pos,
+        message = message,
+    }
+end
+
+-- an expected warning
+local function warn(code, path, message)
+    return {
+        severity = 'warning',
+        code = code,
+        path = path,
+        message = message,
+    }
+end
+
+function testcase.check_accepts_realistic_grammar()
+    assert.equal(check.check(lua_like_grammar()), {})
+end
+
+function testcase.check_reports_pattern_errors_in_each_location()
+    local grammar = lua_like({
+        tokens = {
+            number = '"a" ""',
+            _digits = 'DIGITS+',
+            long_string = {
+                open = '"[" level "["**',
+                close = '"]" level "]" /',
+                -- a capture definition cannot refer to a capture
+                level = 'level',
+            },
+        },
+        rules = {
+            args = 'expr ("," expr)* [',
+        },
+    })
+
+    assert.equal(check.check(grammar), {
+        at('unknown_builtin', 'tokens._digits', 1,
+           'unknown builtin class: DIGITS'),
+        at('ordered_choice_not_allowed', 'tokens.long_string.close', 15,
+           'ordered choice "/" is not allowed in this context'),
+        at('invalid_reference', 'tokens.long_string.level', 1,
+           'only fragment names (starting with "_") may be referenced: level'),
+        at('repeated_postfix', 'tokens.long_string.open', 15,
+           'postfix operator follows another postfix operator'),
+        at('empty_literal', 'tokens.number', 5, 'literal is empty'),
+        at('class_not_allowed', 'rules.args', 18,
+           'character class is not allowed in this context'),
+    })
+end
+
+function testcase.check_reports_token_pattern_references()
+    assert.equal(check.check(lua_like({
+        tokens = {
+            number = '_digitz ("." _digits)?',
+            name = 'ALPHA _last',
+        },
+    })), {
+        at('invalid_reference', 'tokens.name', 7,
+           'tokens.name refers to "_last", which is a rule, not a fragment'),
+        at('undefined_reference', 'tokens.number', 1,
+           'tokens.number refers to undefined fragment "_digitz"'),
+    })
+end
+
+function testcase.check_reports_rule_pattern_references()
+    assert.equal(check.check(lua_like({
+        rules = {
+            expr = 'number | nope | _digits | "nil"',
+        },
+    })), {
+        at('undefined_reference', 'rules.expr', 10,
+           'rules.expr refers to undefined token or rule "nope"'),
+        at('invalid_reference', 'rules.expr', 17, 'rules.expr refers to ' ..
+               '"_digits", which is a fragment, not a token or rule'),
+    })
+end
+
+function testcase.check_reports_undeclared_literals()
+    assert.equal(check.check(lua_like({
+        rules = {
+            stat = 'assign / call / ";" / "?"',
+        },
+    })), {
+        at('undeclared_literal', 'rules.stat', 23,
+           'rules.stat refers to undeclared literal "?"'),
+    })
+
+    -- without symbols and keywords every literal is undeclared
+    assert.equal(check.check({
+        lexogram = '2026.11.15.1',
+        start = 's',
+        tokens = {},
+        rules = {
+            s = '"a" "\\n"',
+        },
+    }), {
+        at('undeclared_literal', 'rules.s', 1,
+           'rules.s refers to undeclared literal "a"'),
+        at('undeclared_literal', 'rules.s', 5,
+           'rules.s refers to undeclared literal "\\010"'),
+    })
+end
+
+function testcase.check_matches_literals_case_insensitively_with_ignore_case()
+    -- "LOCAL" and "Return" are declared through keywords.ignore_case, and
+    -- the keywords they match are therefore used
+    assert.equal(check.check(lua_like({
+        rules = {
+            assign = '"LOCAL" name "=" expr',
+            _last = '"Return" expr',
+        },
+    })), {})
+
+    for _, ignore_case in ipairs({
+        false,
+        'absent',
+    }) do
+        local grammar = lua_like({
+            rules = {
+                _last = '"RETURN" expr',
+            },
+        })
+        if ignore_case == 'absent' then
+            grammar.keywords.ignore_case = nil
+        else
+            grammar.keywords.ignore_case = ignore_case
+        end
+
+        assert.equal(check.check(grammar), {
+            at('undeclared_literal', 'rules._last', 1,
+               'rules._last refers to undeclared literal "RETURN"'),
+        })
+    end
+
+    -- case folding is ASCII only and exact otherwise
+    assert.equal(check.check(lua_like({
+        symbols = {
+            [6] = 'a' .. string.char(195, 169),
+        },
+        rules = {
+            expr = 'number | long_string | name | "nil" | "A' ..
+                string.char(195, 137) .. '"',
+        },
+    })), {
+        at('undeclared_literal', 'rules.expr', 39,
+           'rules.expr refers to undeclared literal "A\\195\\137"'),
+    })
+end
+
+function testcase.check_skips_literal_check_for_malformed_items()
+    assert.equal(check.check(lua_like({
+        symbols = 'x',
+    })), {
+        err('invalid_type', 'symbols', 'symbols must be table, got string'),
+    })
+    assert.equal(check.check(lua_like({
+        keywords = 1,
+        symbols = false,
+    })), {
+        err('invalid_type', 'keywords', 'keywords must be table, got number'),
+    })
+end
+
+function testcase.check_reports_parse_errors_without_reference_checks()
+    assert.equal(check.check({
+        lexogram = '2026.11.15.1',
+        start = 'a',
+        tokens = 1,
+        rules = {
+            a = 'b [',
+        },
+    }), {
+        err('invalid_type', 'tokens', 'tokens must be table, got number'),
+        at('class_not_allowed', 'rules.a', 3,
+           'character class is not allowed in this context'),
+    })
+    assert.equal(check.check({
+        lexogram = '2026.11.15.1',
+        start = 'a',
+        tokens = {
+            x = '_nope ""',
+            d = {
+                open = 'x',
+                close = '"b"',
+            },
+        },
+    }), {
+        at('invalid_reference', 'tokens.d.open', 1, 'only fragment names' ..
+               ' (starting with "_") and capture names may be referenced: x'),
+        at('empty_literal', 'tokens.x', 7, 'literal is empty'),
+        err('missing_field', 'rules', 'required field rules is missing'),
+    })
+end
+
+function testcase.check_reports_unused_definitions()
+    local grammar = lua_like({
+        tokens = {
+            unused = '"u"',
+            -- _b is used only by another fragment, _self only by itself
+            number = '_a ("." _digits)?',
+            _a = '_b',
+            _b = '_digits',
+            _self = '"s" _self?',
+            _lonely = '"l"',
+        },
+        symbols = {
+            [6] = '+',
+        },
+    })
+    grammar.skip[2] = 'unused_skip'
+    grammar.tokens.unused_skip = '"k"'
+
+    assert.equal(check.check(grammar), {
+        warn('unused_fragment', 'tokens._lonely',
+             'tokens._lonely is not used by any token pattern'),
+        warn('unused_token', 'tokens.unused',
+             'tokens.unused is not used by any rule and not listed in skip'),
+        warn('unused_literal', 'symbols[6]',
+             'symbols[6] "+" is not used by any rule'),
+    })
+end
+
+function testcase.check_reports_unreachable_rules()
+    local grammar = lua_like({
+        rules = {
+            -- retval is reachable only through the _last rule
+            _last = '"return" retval',
+            retval = 'expr',
+            orphan_a = 'orphan_b',
+            orphan_b = 'orphan_a call',
+        },
+    })
+
+    assert.equal(check.check(grammar), {
+        warn('unreachable_rule', 'rules.orphan_a',
+             'rules.orphan_a is not reachable from start'),
+        warn('unreachable_rule', 'rules.orphan_b',
+             'rules.orphan_b is not reachable from start'),
+    })
+
+    -- start may be the only rule
+    assert.equal(check.check({
+        lexogram = '2026.11.15.1',
+        start = 's',
+        tokens = {
+            t = '"t"',
+        },
+        rules = {
+            s = 't',
+        },
+    }), {})
+end
+
+function testcase.check_suppresses_warnings_when_errors_exist()
+    local grammar = lua_like({
+        tokens = {
+            unused = '"u"',
+            _lonely = '"l"',
+        },
+        symbols = {
+            [6] = '+',
+        },
+        rules = {
+            orphan = 'expr',
+            stat = 'assign / call / ";" / "?"',
+        },
+    })
+
+    assert.equal(check.check(grammar), {
+        at('undeclared_literal', 'rules.stat', 23,
+           'rules.stat refers to undeclared literal "?"'),
+    })
+end
+
+function testcase.check_orders_pattern_diagnostics_by_pos()
+    assert.equal(check.check(lua_like({
+        rules = {
+            expr = '"?" nope "!" _digits | number | long_string | name | "nil"',
+        },
+    })), {
+        at('undeclared_literal', 'rules.expr', 1,
+           'rules.expr refers to undeclared literal "?"'),
+        at('undefined_reference', 'rules.expr', 5,
+           'rules.expr refers to undefined token or rule "nope"'),
+        at('undeclared_literal', 'rules.expr', 10,
+           'rules.expr refers to undeclared literal "!"'),
+        at('invalid_reference', 'rules.expr', 14, 'rules.expr refers to ' ..
+               '"_digits", which is a fragment, not a token or rule'),
     })
 end
