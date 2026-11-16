@@ -1595,3 +1595,70 @@ function testcase.parse_raises_for_invalid_captures()
     local ast = pattern.parse('a', 'rules', nil)
     assert.equal(ast, ref(1, 'a'))
 end
+
+-- nesting limit
+
+local function nested(depth, inner)
+    return string.rep('(', depth) .. inner .. string.rep(')', depth)
+end
+
+function testcase.parse_accepts_100_nested_groups()
+    assert.equal(parse_ok(nested(100, '"a"')), lit(101, 'a'))
+    assert.equal(parse_ok(nested(100, 'a'), 'rules'), ref(101, 'a'))
+    -- the depth returns to zero after a group is closed
+    assert.equal(parse_ok(nested(100, '"a"') .. ' ' .. nested(100, '"b"')),
+                 seq({
+        lit(101, 'a'),
+        lit(305, 'b'),
+    }))
+end
+
+function testcase.parse_returns_nesting_too_deep()
+    check_errors({
+        {
+            nested(101, '"a"'),
+            101,
+            'nesting_too_deep',
+        },
+        {
+            '"x" ' .. nested(101, '"a"'),
+            105,
+            'nesting_too_deep',
+        },
+        -- the nesting error is found before a later syntax error
+        {
+            string.rep('(', 101) .. '"a" @ ""',
+            101,
+            'nesting_too_deep',
+        },
+    })
+    check_errors({
+        {
+            nested(101, 'a'),
+            101,
+            'nesting_too_deep',
+        },
+    }, 'rules')
+
+    local ast, err = pattern.parse(nested(101, '"a"'), 'tokens')
+    assert.is_nil(ast)
+    assert.equal(err.message, 'groups are nested deeper than 100 levels')
+end
+
+function testcase.parse_returns_error_for_very_deep_nesting()
+    for _, context in ipairs({
+        'tokens',
+        'rules',
+    }) do
+        local ok, ast, err = pcall(pattern.parse, string.rep('(', 100000),
+                                   context)
+
+        assert.is_true(ok)
+        assert.is_nil(ast)
+        assert.equal(err, {
+            pos = 101,
+            code = 'nesting_too_deep',
+            message = 'groups are nested deeper than 100 levels',
+        })
+    end
+end

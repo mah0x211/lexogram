@@ -811,6 +811,28 @@ function testcase.check_handles_cyclic_tables()
     })
 end
 
+function testcase.check_reports_too_deeply_nested_pattern()
+    local ok, diagnostics = pcall(check.check, {
+        lexogram = '2026.11.15.1',
+        start = 's',
+        tokens = {},
+        rules = {
+            s = string.rep('(', 100000),
+        },
+    })
+
+    assert.is_true(ok)
+    assert.equal(diagnostics, {
+        {
+            severity = 'error',
+            code = 'nesting_too_deep',
+            path = 'rules.s',
+            pos = 101,
+            message = 'groups are nested deeper than 100 levels',
+        },
+    })
+end
+
 function testcase.check_never_raises()
     local odd = {
         {},

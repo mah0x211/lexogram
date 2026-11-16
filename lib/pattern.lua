@@ -26,6 +26,7 @@
 -- the 'rules' context allows references to any non-reserved name and ordered
 -- choice instead. In the 'tokens' context, the names of the captures of a
 -- delimited token table may also be given; they resolve to capture nodes.
+-- Groups may be nested at most MAX_NESTING levels deep (nesting_too_deep).
 local type = type
 local error = error
 local pcall = pcall
@@ -67,6 +68,13 @@ local LOWER_X = 120
 local LBRACE = 123
 local VBAR = 124
 local RBRACE = 125
+
+-- Deepest allowed nesting of groups. The parser recurses once per group, so
+-- without a limit a deeply nested pattern would exhaust the call depth of
+-- the runtime, at a depth that differs between runtimes. The limit keeps
+-- the result deterministic on every runtime; it is far below any runtime's
+-- call depth limit and far above what any real grammar needs.
+local MAX_NESTING = 100
 
 -- Largest valid Unicode code point and the surrogate range.
 local MAX_CODE_POINT = 0x10FFFF
@@ -792,11 +800,19 @@ end
 --- @return table node
 local function parse_group(p)
     local open = p.tpos
+    -- the limit is checked before anything after the "(" is scanned, so the
+    -- error is the first one from the left
+    if p.depth >= MAX_NESTING then
+        fail(open, 'nesting_too_deep',
+             'groups are nested deeper than ' .. MAX_NESTING .. ' levels')
+    end
+    p.depth = p.depth + 1
     advance(p)
     local node = parse_choice(p)
     if p.kind ~= ')' then
         fail(open, 'unbalanced_paren', '"(" is not closed')
     end
+    p.depth = p.depth - 1
     advance(p)
     return node
 end
@@ -927,6 +943,8 @@ local function parse(src, context, captures)
         src = src,
         len = #src,
         pos = 1,
+        -- current nesting depth of groups
+        depth = 0,
         context = CONTEXTS[context],
         captures = captures,
     })
