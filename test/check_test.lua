@@ -1635,6 +1635,9 @@ function testcase.check_reports_unused_definitions()
     assert.equal(check.check(grammar), {
         warn('unused_fragment', 'tokens._lonely',
              'tokens._lonely is not used by any token pattern'),
+        -- a self reference counts as a use, but is a lexical error
+        err('fragment_recursion', 'tokens._self',
+            'fragment _self is recursive: _self -> _self'),
         warn('unused_token', 'tokens.unused',
              'tokens.unused is not used by any rule and not listed in skip'),
         warn('unused_literal', 'symbols[6]',
@@ -1708,5 +1711,132 @@ function testcase.check_orders_pattern_diagnostics_by_pos()
            'rules.expr refers to undeclared literal "!"'),
         at('invalid_reference', 'rules.expr', 14, 'rules.expr refers to ' ..
                '"_digits", which is a fragment, not a token or rule'),
+    })
+end
+
+-- lexical pass
+
+function testcase.check_runs_lexical_pass_only_without_errors()
+    -- e matches the empty string, but an earlier error stops the pass
+    assert.equal(check.check(lua_like({
+        tokens = {
+            e = '"e"*',
+        },
+        rules = {
+            stat = 'assign / call / ";" / "?"',
+        },
+    })), {
+        at('undeclared_literal', 'rules.stat', 23,
+           'rules.stat refers to undeclared literal "?"'),
+    })
+end
+
+function testcase.check_reports_lexical_errors_with_usage_warnings()
+    assert.equal(check.check(lua_like({
+        tokens = {
+            dup = 'DIGIT+',
+        },
+    })), {
+        warn('unused_token', 'tokens.dup',
+             'tokens.dup is not used by any rule and not listed in skip'),
+        err('token_conflict', 'tokens.number', 'tokens.number can match the' ..
+                ' same string as tokens.dup, e.g. "0"'),
+    })
+end
+
+function testcase.check_accepts_realistic_token_set()
+    assert.equal(check.check({
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '(ALPHA | "_") (ALPHA | DIGIT | "_")*',
+            number = '_digits ("." _digits)? (("e" | "E") ("+" | "-")? _digits)?',
+            _digits = 'DIGIT+',
+            string = '"\\"" ([^"\\\\\\n] | "\\\\" ANY)* "\\""',
+            space = '[ \\t\\r\\n]+',
+            comment = '"--" [^\\n]*',
+            long_string = {
+                open = '"[" level "["',
+                close = '"]" level "]"',
+                level = '"="*',
+            },
+        },
+        symbols = {
+            '=',
+            '==',
+            '~=',
+            '<',
+            '<=',
+            '.',
+            '..',
+            '...',
+            '(',
+            ')',
+            ',',
+            ';',
+        },
+        keywords = {
+            'local',
+            'function',
+            'return',
+            'if',
+            'then',
+            'end',
+            'and',
+            'or',
+            'not',
+            'nil',
+        },
+        skip = {
+            'space',
+            'comment',
+        },
+        rules = {
+            chunk = 'stat* _last?',
+            stat = 'assign / call / ";" / cond / func',
+            assign = '"local" name "=" exp',
+            call = 'name "(" args? ")"',
+            args = 'exp ("," exp)*',
+            cond = '"if" exp "then" stat* "end"',
+            func = '"function" name "(" "..."? ")" stat* "end"',
+            _last = '"return" exp',
+            exp = 'term (binop term)*',
+            binop = '"==" / "~=" / "<" / "<=" / ".." / "and" / "or"',
+            term = '"not"? (number | string | long_string | name | "nil" |' ..
+                ' name "." name)',
+        },
+    }), {})
+end
+
+function testcase.check_rejects_delimited_token_named_like_fragment()
+    local ok, diagnostics = pcall(check.check, {
+        lexogram = '2026.11.15.1',
+        start = 's',
+        tokens = {
+            n = '"n" _d',
+            _d = {
+                open = '"a"',
+                close = '"b"',
+                _x = '"x"',
+            },
+        },
+        symbols = {
+            'x',
+        },
+        rules = {
+            s = 'n "x"',
+        },
+    })
+
+    assert.is_true(ok)
+    assert.equal(diagnostics, {
+        err('invalid_name', 'tokens._d', 'tokens._d: a delimited token' ..
+                ' table cannot be a fragment (its name must not start with "_")'),
+        -- capture names inside it are still checked
+        err('invalid_name', 'tokens._d._x',
+            'tokens._d._x: capture name "_x" must not start with "_", which' ..
+                ' is ambiguous with a fragment reference'),
+        at('invalid_reference', 'tokens.n', 5,
+           'tokens.n refers to "_d", which is a token, not a fragment'),
     })
 end

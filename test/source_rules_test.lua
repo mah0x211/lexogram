@@ -127,10 +127,12 @@ function testcase.module_files_lists_rockspec_modules()
         'lib/check.lua',
         'lib/compat.lua',
         'lib/compile/dfa.lua',
+        'lib/compile/lexer.lua',
         'lib/compile/nfa.lua',
         'lib/compile/utf8range.lua',
         'lib/loader.lua',
         'lib/pattern.lua',
+        'lib/text.lua',
         'lib/utf8.lua',
         'lib/version.lua',
     })
