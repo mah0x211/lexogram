@@ -123,8 +123,10 @@ function testcase.module_files_lists_rockspec_modules()
     local files = module_files()
 
     assert.equal(files, {
-        'lua/lexogram.lua',
-        'lua/lexogram/compat.lua',
+        'lib/lexogram.lua',
+        'lib/compat.lua',
+        'lib/pattern.lua',
+        'lib/utf8.lua',
     })
 end
 
