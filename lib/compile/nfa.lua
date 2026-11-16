@@ -33,6 +33,7 @@ local byte = string.byte
 local sort = table.sort
 local byte_less = require('lexogram.compat').byte_less
 local split_codepoints = require('lexogram.compile.utf8range').split
+local get_limit = require('lexogram.compile.limits').get
 
 -- Largest number of states of a machine. Fragments are expanded inline, so
 -- a chain of fragments that each use the previous one twice grows
@@ -191,13 +192,15 @@ end
 
 -- construction
 
--- Sentinel raised when the machine would exceed MAX_STATES.
+-- Sentinel raised when the machine would exceed its state limit.
 local TOO_LARGE = {}
 
 --- new_builder returns an empty machine under construction.
+--- @param max_states integer
 --- @return table
-local function new_builder()
+local function new_builder(max_states)
     return {
+        max_states = max_states,
         count = 0,
         eps = {},
         edges = {},
@@ -209,7 +212,7 @@ end
 --- @param m table
 --- @return integer
 local function new_state(m)
-    if m.count >= MAX_STATES then
+    if m.count >= m.max_states then
         error(TOO_LARGE, 0)
     end
     m.count = m.count + 1
@@ -456,9 +459,10 @@ end
 --- build_machine builds the machine; it raises TOO_LARGE or a message.
 --- @param defs table[]
 --- @param fragments table
+--- @param max_states integer
 --- @return table machine
-local function build_machine(defs, fragments)
-    local m = new_builder()
+local function build_machine(defs, fragments, max_states)
+    local m = new_builder(max_states)
     m.start = new_state(m)
     for _, def in ipairs(defs) do
         local s, acc = new_state(m), new_state(m)
@@ -470,6 +474,7 @@ local function build_machine(defs, fragments)
             compile_ast(m, def.ast, s, acc, fragments)
         end
     end
+    m.max_states = nil
     return m
 end
 
@@ -478,16 +483,19 @@ end
 --- inline and must be acyclic.
 --- @param defs table[]
 --- @param fragments table fragment name -> AST
+--- @param limits table? { max_states } for tests only; max_states defaults
+--- to MAX_STATES
 --- @return table? machine { start, count, eps, edges, accept }
 --- @return table? err { code = 'automaton_too_large', message }
-local function build(defs, fragments)
-    local ok, res = pcall(build_machine, defs, fragments or {})
+local function build(defs, fragments, limits)
+    local max_states = get_limit(limits, 'max_states', MAX_STATES)
+    local ok, res = pcall(build_machine, defs, fragments or {}, max_states)
     if ok then
         return res
     elseif res == TOO_LARGE then
         return nil, {
             code = 'automaton_too_large',
-            message = 'the automaton would have more than ' .. MAX_STATES ..
+            message = 'the automaton would have more than ' .. max_states ..
                 ' states',
         }
     end
@@ -558,6 +566,7 @@ local function accepts(machine, s)
 end
 
 return {
+    MAX_STATES = MAX_STATES,
     find_cycles = find_cycles,
     build = build,
     accepts = accepts,

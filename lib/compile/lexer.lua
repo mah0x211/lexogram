@@ -42,6 +42,7 @@ local quote = require('lexogram.text').quote
 local nfa = require('lexogram.compile.nfa')
 local dfa = require('lexogram.compile.dfa')
 local delimited = require('lexogram.compile.delimited')
+local get_limit = require('lexogram.compile.limits').get
 
 -- Byte value of "_", which starts a fragment name.
 local UNDERSCORE = 95
@@ -292,16 +293,18 @@ end
 --- @param ids table delimited token name -> id
 --- @param fragments table
 --- @param diagnostics table[]
+--- @param limits table { nfa, dfa }
 --- @return table? delimited { open, tokens }
 --- @return table? err
-local function build_delimited(grammar, defs, ids, fragments, diagnostics)
+local function build_delimited(grammar, defs, ids, fragments, diagnostics,
+                               limits)
     local tokens = rawget(grammar, 'tokens')
     local entries, compiled = {}, {}
     for _, def in ipairs(defs) do
         if def.kind == 'delimited' then
             local entry, err = delimited.analyze(def.name,
                                                  rawget(tokens, def.name),
-                                                 fragments, diagnostics)
+                                                 fragments, diagnostics, limits)
             if err then
                 return nil, err
             elseif entry then
@@ -310,7 +313,8 @@ local function build_delimited(grammar, defs, ids, fragments, diagnostics)
             end
         end
     end
-    local open, err = delimited.build_open(entries, ids, fragments, diagnostics)
+    local open, err = delimited.build_open(entries, ids, fragments, diagnostics,
+                                           limits)
     if not open then
         return nil, err
     end
@@ -322,28 +326,42 @@ end
 
 --- build builds the token automaton of grammar.
 --- @param grammar table a grammar that passed the earlier checks
+--- @param limits table? for tests only: { nfa_states, dfa_states }, the
+--- largest number of states of every non-deterministic automaton (passed
+--- to nfa.build) and of every deterministic automaton (passed to dfa.build)
+--- built for the grammar; each defaults to the builder's MAX_STATES
 --- @return table? result { defs, dfa, delimited }, nil when there is an
 --- error
 --- @return table[] diagnostics { severity, code, segments, pos, message }
-local function build(grammar)
+local function build(grammar, limits)
+    -- read here, so that an invalid limit raises at the caller of build
+    limits = {
+        nfa = {
+            max_states = get_limit(limits, 'nfa_states', nfa.MAX_STATES),
+        },
+        dfa = {
+            max_states = get_limit(limits, 'dfa_states', dfa.MAX_STATES),
+        },
+    }
     local diagnostics = {}
     local defs, nfa_defs, rank, fragments, ids = collect_definitions(grammar)
     if check_recursion(diagnostics, fragments) then
         return nil, diagnostics
     end
 
-    local machine, err = nfa.build(nfa_defs, fragments)
+    local machine, err = nfa.build(nfa_defs, fragments, limits.nfa)
     if not machine then
         return too_large(diagnostics, err)
     end
     local d
-    d, err = dfa.build(machine, rank)
+    d, err = dfa.build(machine, rank, limits.dfa)
     if not d then
         return too_large(diagnostics, err)
     end
 
     local compiled
-    compiled, err = build_delimited(grammar, defs, ids, fragments, diagnostics)
+    compiled, err = build_delimited(grammar, defs, ids, fragments, diagnostics,
+                                    limits)
     if not compiled then
         return too_large(diagnostics, err)
     end

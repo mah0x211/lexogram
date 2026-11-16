@@ -28,6 +28,7 @@ local ipairs = ipairs
 local concat = table.concat
 local sort = table.sort
 local byte = string.byte
+local get_limit = require('lexogram.compile.limits').get
 
 -- Largest number of DFA states built by the subset construction. Some
 -- patterns (e.g. ("a" | "b")* "a" ("a" | "b") ... ) need exponentially many
@@ -134,8 +135,9 @@ end
 --- @param machine table
 --- @param class_of integer[]
 --- @param nclasses integer
+--- @param max_states integer
 --- @return table? dfa { n, trans (state -> class -> state), sets }
-local function subset_construction(machine, class_of, nclasses)
+local function subset_construction(machine, class_of, nclasses, max_states)
     local initial = {}
     initial[1] = machine.start
     local start = closure(machine, initial)
@@ -157,7 +159,7 @@ local function subset_construction(machine, class_of, nclasses)
                 local key = concat(set, ',')
                 target = index[key]
                 if not target then
-                    if #sets >= MAX_STATES then
+                    if #sets >= max_states then
                         return nil
                     end
                     sets[#sets + 1] = set
@@ -343,17 +345,20 @@ end
 --- conflicts and accept holds the smallest of those ids.
 --- @param machine table result of nfa.build
 --- @param rank table id -> rank
+--- @param limits table? { max_states } for tests only; max_states defaults
+--- to MAX_STATES
 --- @return table? d { nstates, nclasses, classes, trans, accept,
 --- accept_sets, conflicts }
 --- @return table? err { code = 'automaton_too_large', message }
-local function build(machine, rank)
+local function build(machine, rank, limits)
+    local max_states = get_limit(limits, 'max_states', MAX_STATES)
     local class_of, nclasses = byte_classes(machine)
-    local raw = subset_construction(machine, class_of, nclasses)
+    local raw = subset_construction(machine, class_of, nclasses, max_states)
     if not raw then
         return nil, {
             code = 'automaton_too_large',
             message = 'the deterministic automaton would have more than ' ..
-                MAX_STATES .. ' states',
+                max_states .. ' states',
         }
     end
 
@@ -436,6 +441,7 @@ local function longest(d, str, pos)
 end
 
 return {
+    MAX_STATES = MAX_STATES,
     build = build,
     run = run,
     longest = longest,

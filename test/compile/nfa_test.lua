@@ -32,23 +32,6 @@ local function check(machine, accepted, rejected)
     end
 end
 
--- run fn(...) with the debug hook removed (see utf8range_test.lua): the
--- line hook of luacov makes building 200000 states take minutes
-local function without_hook(fn, ...)
-    local hook, mask, count = debug.gethook()
-    debug.sethook()
-    local res = {
-        pcall(fn, ...),
-    }
-    if hook then
-        debug.sethook(hook, mask, count)
-    end
-    if not res[1] then
-        error(res[2], 0)
-    end
-    return res[2], res[3]
-end
-
 -- structure
 
 function testcase.build_returns_plain_machine()
@@ -431,37 +414,78 @@ function testcase.build_raises_for_invalid_input()
 end
 
 function testcase.build_stops_at_state_limit()
-    local fragments = {
-        _f1 = P('"x"'),
-    }
-    for i = 2, 20 do
-        fragments['_f' .. i] = P('_f' .. (i - 1) .. ' _f' .. (i - 1))
-    end
+    assert.equal(nfa.MAX_STATES, 200000)
 
-    local machine, err = without_hook(nfa.build, {
+    -- start, entry, accept and one state between "a" and "b"
+    local defs = {
         {
             id = 1,
-            ast = P('_f20'),
+            ast = P('"ab"'),
         },
-    }, fragments)
-
+    }
+    assert.equal(assert(nfa.build(defs, {}, {
+        max_states = 4,
+    })).count, 4)
+    local machine, err = nfa.build(defs, {}, {
+        max_states = 3,
+    })
     assert.is_nil(machine)
     assert.equal(err, {
         code = 'automaton_too_large',
-        message = 'the automaton would have more than 200000 states',
+        message = 'the automaton would have more than 3 states',
     })
 
-    -- a large machine below the limit is built
-    machine = without_hook(nfa.build, {
+    -- a chain of fragments that doubles at each level
+    local fragments = {
+        _f1 = P('"x"'),
+    }
+    for i = 2, 8 do
+        fragments['_f' .. i] = P('_f' .. (i - 1) .. ' _f' .. (i - 1))
+    end
+    machine, err = nfa.build({
         {
             id = 1,
-            ast = P('_f16'),
+            ast = P('_f8'),
         },
-    }, fragments)
-    assert.is_table(machine)
-    assert.equal(nfa.accepts(machine, string.rep('x', 2 ^ 15)), {
+    }, fragments, {
+        max_states = 100,
+    })
+    assert.is_nil(machine)
+    assert.equal(err.message, 'the automaton would have more than 100 states')
+    -- an empty limits table means the default
+    machine = assert(nfa.build({
+        {
+            id = 1,
+            ast = P('_f8'),
+        },
+    }, fragments, {}))
+    assert.equal(nfa.accepts(machine, string.rep('x', 128)), {
         1,
     })
+end
+
+function testcase.build_raises_for_invalid_limits()
+    local defs = {
+        {
+            id = 1,
+            ast = P('"a"'),
+        },
+    }
+    local err = assert.throws(nfa.build, defs, {}, 'x')
+    assert.match(err, 'limits must be table, got string')
+    for _, v in ipairs({
+        0,
+        -1,
+        1.5,
+        '3',
+    }) do
+        err = assert.throws(nfa.build, defs, {}, {
+            max_states = v,
+        })
+        assert.match(err,
+                     'limits.max_states must be a positive integer, got ' ..
+                         tostring(v))
+    end
 end
 
 -- find_cycles

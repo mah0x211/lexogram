@@ -27,22 +27,6 @@ local function err(code, segments, message)
     }
 end
 
--- run fn(...) with the debug hook removed (see utf8range_test.lua)
-local function without_hook(fn, ...)
-    local hook, mask, count = debug.gethook()
-    debug.sethook()
-    local res = {
-        pcall(fn, ...),
-    }
-    if hook then
-        debug.sethook(hook, mask, count)
-    end
-    if not res[1] then
-        error(res[2], 0)
-    end
-    return res[2], res[3]
-end
-
 function testcase.build_numbers_definitions()
     local result, diagnostics = lexer.build(grammar({
         num = 'DIGIT+',
@@ -204,35 +188,47 @@ function testcase.build_reports_fragment_recursion()
 end
 
 function testcase.build_reports_automaton_too_large()
-    local result, diagnostics = without_hook(lexer.build, grammar({
-        t = '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 16),
-    }))
-
+    -- the DFA of the pattern tokens
+    local result, diagnostics = lexer.build(grammar({
+        t = '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 4),
+    }), {
+        dfa_states = 8,
+    })
     assert.is_nil(result)
     assert.equal(diagnostics, {
         err('automaton_too_large', {
             'tokens',
-        }, 'the deterministic automaton would have more than 50000 states'),
+        }, 'the deterministic automaton would have more than 8 states'),
+    })
+
+    -- the NFA of the pattern tokens
+    result, diagnostics = lexer.build(grammar({
+        t = '"abcdefgh"',
+    }), {
+        nfa_states = 5,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the automaton would have more than 5 states'),
     })
 end
 
-function testcase.build_reports_nfa_too_large()
-    local tokens = {
-        t = '_f20',
-        _f1 = '"x"',
-    }
-    for i = 2, 20 do
-        tokens['_f' .. i] = '_f' .. (i - 1) .. ' _f' .. (i - 1)
-    end
-
-    local result, diagnostics = without_hook(lexer.build, grammar(tokens))
-
-    assert.is_nil(result)
-    assert.equal(diagnostics, {
-        err('automaton_too_large', {
-            'tokens',
-        }, 'the automaton would have more than 200000 states'),
+function testcase.build_raises_for_invalid_limits()
+    local g = grammar({
+        t = '"t"',
     })
+    local msg = assert.throws(lexer.build, g, 'x')
+    assert.match(msg, 'limits must be table, got string')
+    msg = assert.throws(lexer.build, g, {
+        nfa_states = 0,
+    })
+    assert.match(msg, 'limits.nfa_states must be a positive integer, got 0')
+    msg = assert.throws(lexer.build, g, {
+        dfa_states = 2.5,
+    })
+    assert.match(msg, 'limits.dfa_states must be a positive integer, got 2.5')
 end
 
 function testcase.build_reports_empty_match()
@@ -835,71 +831,71 @@ function testcase.build_allows_delimited_tokens_overlapping_other_tokens()
 end
 
 function testcase.build_reports_delimited_too_large()
-    local result, diagnostics = without_hook(lexer.build, grammar({
-        t = {
-            open = '"x" c',
-            close = '"y"',
-            c = '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 16),
+    local blowup = '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 3)
+    local long = '"' .. string.rep('x', 20) .. '"'
+    for _, case in ipairs({
+        -- the DFA and the NFA of a capture definition
+        {
+            {
+                open = '"x" c',
+                close = '"y"',
+                c = blowup,
+            },
+            'dfa_states',
         },
-    }))
-    assert.is_nil(result)
-    assert.equal(diagnostics, {
-        err('automaton_too_large', {
-            'tokens',
-        }, 'the deterministic automaton would have more than 50000 states'),
-    })
-
-    -- the open automaton alone is too large
-    result, diagnostics = without_hook(lexer.build, grammar({
-        t = {
-            open = '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 16),
-            close = '"y"',
+        {
+            {
+                open = '"x" c',
+                close = '"y"',
+                c = long,
+            },
+            'nfa_states',
         },
-    }))
-    assert.is_nil(result)
-    assert.equal(diagnostics, {
-        err('automaton_too_large', {
-            'tokens',
-        }, 'the deterministic automaton would have more than 50000 states'),
-    })
-
-    -- the NFA of a capture definition is too large
-    local tokens = {
-        t = {
-            open = '"x" c',
-            close = '"y"',
-            c = '_f20',
+        -- the DFA and the NFA of the rest of open after the capture
+        {
+            {
+                open = '"x" c ' .. blowup,
+                close = '"y"',
+                c = '"c"',
+            },
+            'dfa_states',
         },
-        _f1 = '"x"',
-    }
-    for i = 2, 20 do
-        tokens['_f' .. i] = '_f' .. (i - 1) .. ' _f' .. (i - 1)
+        {
+            {
+                open = '"x" c ' .. long,
+                close = '"y"',
+                c = '"c"',
+            },
+            'nfa_states',
+        },
+        -- the DFA and the NFA of the open automaton
+        {
+            {
+                open = blowup,
+                close = '"y"',
+            },
+            'dfa_states',
+        },
+        {
+            {
+                open = long,
+                close = '"y"',
+            },
+            'nfa_states',
+        },
+    }) do
+        local result, diagnostics = lexer.build(grammar({
+            t = case[1],
+        }), {
+            [case[2]] = 10,
+        })
+        assert.is_nil(result)
+        assert.equal(diagnostics, {
+            err('automaton_too_large', {
+                'tokens',
+            }, case[2] == 'dfa_states' and
+                    'the deterministic automaton would have more than 10 states' or
+                    'the automaton would have more than 10 states'),
+        })
     end
-    result, diagnostics = without_hook(lexer.build, grammar(tokens))
-    assert.is_nil(result)
-    assert.equal(diagnostics, {
-        err('automaton_too_large', {
-            'tokens',
-        }, 'the automaton would have more than 200000 states'),
-    })
-
-    -- the rest of open after the capture is too large
-    result, diagnostics = without_hook(lexer.build, grammar({
-        t = {
-            open = '"x" c "y"',
-            close = '"y"',
-            c = '"c"',
-        },
-        u = {
-            open = '"u" c ("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 16),
-            close = '"y"',
-            c = '"c"',
-        },
-    }))
-    assert.is_nil(result)
-    assert.equal(diagnostics, {
-        err('automaton_too_large', {
-            'tokens',
-        }, 'the deterministic automaton would have more than 50000 states'),
-    })
 end

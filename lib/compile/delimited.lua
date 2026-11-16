@@ -31,6 +31,10 @@
 -- replaced by the captured bytes. The body ends at the first occurrence of
 -- the close string after the open; without one, the token runs to the end
 -- of the input.
+--
+-- The functions take a limits table { nfa = { max_states }, dfa =
+-- { max_states } } that is passed to nfa.build and dfa.build (tests only;
+-- lexogram.compile.lexer builds it, and empty tables mean the defaults).
 local next = next
 local rawget = rawget
 local ipairs = ipairs
@@ -397,21 +401,22 @@ end
 --- single_dfa returns the DFA of ast as the only definition.
 --- @param ast table
 --- @param fragments table
+--- @param limits table { nfa, dfa }
 --- @return table? d
 --- @return table? err
-local function single_dfa(ast, fragments)
+local function single_dfa(ast, fragments, limits)
     local machine, err = nfa.build({
         {
             id = 1,
             ast = ast,
         },
-    }, fragments)
+    }, fragments, limits.nfa)
     if not machine then
         return nil, err
     end
     return dfa.build(machine, {
         1,
-    })
+    }, limits.dfa)
 end
 
 --- continuation_bytes returns the set of bytes with a transition out of
@@ -440,7 +445,8 @@ end
 --- @return table? capture DFA
 --- @return table? err automaton_too_large
 local function check_overlap(a, index, node)
-    local capture, err = single_dfa(a.capdefs[a.capture_name], a.fragments)
+    local capture, err = single_dfa(a.capdefs[a.capture_name], a.fragments,
+                                    a.limits)
     if not capture then
         return nil, err
     end
@@ -457,7 +463,7 @@ local function check_overlap(a, index, node)
         type = 'seq',
         pos = rest[1].pos,
         items = rest,
-    }, a.fragments)
+    }, a.fragments, a.limits)
     if not follow then
         return nil, err
     end
@@ -561,11 +567,13 @@ end
 --- @param tbl table
 --- @param fragments table user fragments
 --- @param diagnostics table[]
+--- @param limits table { nfa, dfa }
 --- @return table? entry { name, open, synthetic, capture_ast, token }
 --- @return table? err automaton_too_large
-local function analyze(name, tbl, fragments, diagnostics)
+local function analyze(name, tbl, fragments, diagnostics, limits)
     local before = #diagnostics
     local a = new_analysis(name, tbl, fragments, diagnostics)
+    a.limits = limits
     local index = check_open_captures(a)
     local prefix
     if index then
@@ -605,9 +613,10 @@ end
 --- @param ids table name -> id
 --- @param fragments table user fragments
 --- @param diagnostics table[]
+--- @param limits table { nfa, dfa }
 --- @return table? d
 --- @return table? err automaton_too_large
-local function build_open(entries, ids, fragments, diagnostics)
+local function build_open(entries, ids, fragments, diagnostics, limits)
     local all = {}
     for k, v in next, fragments do
         all[k] = v
@@ -625,12 +634,12 @@ local function build_open(entries, ids, fragments, diagnostics)
             all[entry.synthetic] = entry.capture_ast
         end
     end
-    local machine, err = nfa.build(defs, all)
+    local machine, err = nfa.build(defs, all, limits.nfa)
     if not machine then
         return nil, err
     end
     local d
-    d, err = dfa.build(machine, rank)
+    d, err = dfa.build(machine, rank, limits.dfa)
     if not d then
         return nil, err
     end

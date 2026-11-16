@@ -571,20 +571,67 @@ end
 -- size limit
 
 function testcase.build_stops_at_state_limit()
+    assert.equal(dfa.MAX_STATES, 50000)
+
     local machine = assert(nfa.build({
         {
             id = 1,
-            ast = P('("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 16)),
+            ast = P('"ab"'),
         },
     }, {}))
-
-    local d, err = without_hook(dfa.build, machine, {
+    -- the subset construction finds the start and the states after "a"
+    -- and after "b"
+    assert.equal(assert(dfa.build(machine, {
         [1] = 2,
+    }, {
+        max_states = 3,
+    })).nstates, 3)
+    local d, err = dfa.build(machine, {
+        [1] = 2,
+    }, {
+        max_states = 2,
     })
-
     assert.is_nil(d)
     assert.equal(err, {
         code = 'automaton_too_large',
-        message = 'the deterministic automaton would have more than 50000 states',
+        message = 'the deterministic automaton would have more than 2 states',
     })
+
+    -- a pattern that needs exponentially many states
+    machine = assert(nfa.build({
+        {
+            id = 1,
+            ast = P('("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 6)),
+        },
+    }, {}))
+    d, err = dfa.build(machine, {
+        [1] = 2,
+    }, {
+        max_states = 100,
+    })
+    assert.is_nil(d)
+    assert.equal(err.message,
+                 'the deterministic automaton would have more than 100 states')
+    assert.equal(assert(dfa.build(machine, {
+        [1] = 2,
+    }, {})).nstates, 128)
+end
+
+function testcase.build_raises_for_invalid_limits()
+    local machine = assert(nfa.build({
+        {
+            id = 1,
+            ast = P('"a"'),
+        },
+    }, {}))
+    local err = assert.throws(dfa.build, machine, {
+        [1] = 2,
+    }, true)
+    assert.match(err, 'limits must be table, got boolean')
+    err = assert.throws(dfa.build, machine, {
+        [1] = 2,
+    }, {
+        max_states = 0,
+    })
+    assert.match(err, 'limits.max_states must be a positive integer, got 0')
 end

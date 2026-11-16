@@ -5,6 +5,12 @@ local nfa = require('lexogram.compile.nfa')
 local dfa = require('lexogram.compile.dfa')
 local pattern = require('lexogram.pattern')
 
+-- default limits for analyze
+local LIMITS = {
+    nfa = {},
+    dfa = {},
+}
+
 local function build_dfa(src)
     local machine = assert(nfa.build({
         {
@@ -35,7 +41,7 @@ function testcase.analyze_returns_compiled_table()
         open = '"[" level "["',
         close = '"]" level "]"',
         level = '"="*',
-    }, {}, diagnostics)
+    }, {}, diagnostics, LIMITS)
 
     assert.is_nil(err)
     assert.equal(diagnostics, {})
@@ -65,7 +71,7 @@ function testcase.analyze_handles_capture_only_open()
         open = 'tag',
         close = 'tag',
         tag = '"<" ALPHA+ ">"',
-    }, {}, diagnostics)
+    }, {}, diagnostics, LIMITS)
 
     assert.equal(diagnostics, {})
     assert.equal(entry.token.prefix, 0)
@@ -86,7 +92,7 @@ function testcase.analyze_returns_table_without_capture()
     local entry = delimited.analyze('c', {
         open = '"/*"',
         close = '"*/"',
-    }, {}, diagnostics)
+    }, {}, diagnostics, LIMITS)
 
     assert.equal(diagnostics, {})
     assert.is_nil(entry.synthetic)
