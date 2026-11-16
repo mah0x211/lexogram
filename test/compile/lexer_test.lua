@@ -64,6 +64,16 @@ function testcase.build_numbers_definitions()
     assert.equal(result.defs, {
         {
             id = 1,
+            kind = 'reserved',
+            name = 'INVALID',
+        },
+        {
+            id = 2,
+            kind = 'reserved',
+            name = 'ERROR',
+        },
+        {
+            id = 3,
             kind = 'token',
             name = 'id',
             segments = {
@@ -72,7 +82,7 @@ function testcase.build_numbers_definitions()
             },
         },
         {
-            id = 2,
+            id = 4,
             kind = 'token',
             name = 'num',
             segments = {
@@ -81,7 +91,7 @@ function testcase.build_numbers_definitions()
             },
         },
         {
-            id = 3,
+            id = 5,
             kind = 'symbol',
             name = '+',
             segments = {
@@ -90,7 +100,7 @@ function testcase.build_numbers_definitions()
             },
         },
         {
-            id = 4,
+            id = 6,
             kind = 'symbol',
             name = '-',
             segments = {
@@ -99,7 +109,7 @@ function testcase.build_numbers_definitions()
             },
         },
         {
-            id = 5,
+            id = 7,
             kind = 'keyword',
             name = 'if',
             segments = {
@@ -108,7 +118,7 @@ function testcase.build_numbers_definitions()
             },
         },
         {
-            id = 6,
+            id = 8,
             kind = 'delimited',
             name = 'str',
             segments = {
@@ -118,7 +128,7 @@ function testcase.build_numbers_definitions()
         },
     })
     assert.equal(result.delimited.tokens, {
-        [6] = {
+        [8] = {
             close = {
                 {
                     literal = '"',
@@ -142,23 +152,23 @@ function testcase.build_numbers_definitions()
     end
     assert.equal(tokens, {
         {
-            1,
+            3,
             'ifx',
         },
         {
-            3,
+            5,
             '+',
         },
         {
-            2,
+            4,
             '12',
         },
         {
-            4,
+            6,
             '-',
         },
         {
-            5,
+            7,
             'IF',
         },
     })
@@ -408,8 +418,8 @@ function testcase.build_compiles_lua_long_strings_and_comments()
     }))
 
     assert.equal(diagnostics, {})
-    assert.equal(result.defs[3], {
-        id = 3,
+    assert.equal(result.defs[5], {
+        id = 5,
         kind = 'delimited',
         name = 'long_comment',
         segments = {
@@ -417,12 +427,12 @@ function testcase.build_compiles_lua_long_strings_and_comments()
             'long_comment',
         },
     })
-    assert.equal(result.defs[4].name, 'long_string')
+    assert.equal(result.defs[6].name, 'long_string')
 
     local tokens = result.delimited.tokens
-    assert.equal(tokens[3].prefix, 3)
-    assert.equal(tokens[4].prefix, 1)
-    assert.equal(tokens[4].close, {
+    assert.equal(tokens[5].prefix, 3)
+    assert.equal(tokens[6].prefix, 1)
+    assert.equal(tokens[6].close, {
         {
             literal = ']',
         },
@@ -438,22 +448,22 @@ function testcase.build_compiles_lua_long_strings_and_comments()
     for _, case in ipairs({
         {
             '[[',
-            4,
+            6,
             3,
         },
         {
             '[==[ x',
-            4,
+            6,
             5,
         },
         {
             '--[[',
-            3,
+            5,
             5,
         },
         {
             '--[=[',
-            3,
+            5,
             6,
         },
     }) do
@@ -475,9 +485,9 @@ function testcase.build_compiles_lua_long_strings_and_comments()
         }, {})
     end
 
-    assert.equal(extract_capture(tokens[4], '[==[ x ]==]', 1), '==')
-    assert.equal(extract_capture(tokens[3], 'a --[=[', 3), '=')
-    assert.equal(extract_capture(tokens[4], '[[', 1), '')
+    assert.equal(extract_capture(tokens[6], '[==[ x ]==]', 1), '==')
+    assert.equal(extract_capture(tokens[5], 'a --[=[', 3), '=')
+    assert.equal(extract_capture(tokens[6], '[[', 1), '')
 end
 
 function testcase.build_compiles_delimited_tokens_with_captures_at_the_ends()
@@ -495,15 +505,15 @@ function testcase.build_compiles_delimited_tokens_with_captures_at_the_ends()
     }))
 
     assert.equal(diagnostics, {})
-    assert.equal(result.delimited.tokens[1].prefix, 2)
-    assert.equal(result.delimited.tokens[2].prefix, 0)
-    assert.equal(extract_capture(result.delimited.tokens[1], '<<EOF\n', 1),
+    assert.equal(result.delimited.tokens[3].prefix, 2)
+    assert.equal(result.delimited.tokens[4].prefix, 0)
+    assert.equal(extract_capture(result.delimited.tokens[3], '<<EOF\n', 1),
                  'EOF')
-    assert.equal(extract_capture(result.delimited.tokens[2], 'q7{', 1), 'q7')
+    assert.equal(extract_capture(result.delimited.tokens[4], 'q7{', 1), 'q7')
     assert.equal({
         dfa.longest(result.delimited.open, '<<EOF', 1),
     }, {
-        1,
+        3,
         6,
     })
 end
@@ -686,9 +696,9 @@ function testcase.build_checks_fixed_length_with_code_point_classes()
         _two = '[\\u{100}-\\u{7ff}] | "ab"',
     }))
     assert.equal(diagnostics, {})
-    assert.equal(result.delimited.tokens[1].prefix, 4)
-    assert.equal(result.delimited.tokens[2].prefix, 4)
-    assert.equal(result.delimited.tokens[3].prefix, 7)
+    assert.equal(result.delimited.tokens[3].prefix, 4)
+    assert.equal(result.delimited.tokens[4].prefix, 4)
+    assert.equal(result.delimited.tokens[5].prefix, 7)
 end
 
 function testcase.build_reports_empty_delimiters()

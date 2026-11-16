@@ -106,9 +106,17 @@ local function collect_tokens(tokens)
     return names, fragments, tables
 end
 
---- collect_definitions returns the definitions of the grammar (pattern
---- tokens sorted by name, then symbols and keywords in index order, then
---- delimited tokens sorted by name), the nfa definitions of the pattern
+-- Reserved kinds that precede every definition: 1 is a byte that matches
+-- no token, 2 is an error span (used by the parser).
+local RESERVED = {
+    'INVALID',
+    'ERROR',
+}
+
+--- collect_definitions returns the definitions of the grammar (the
+--- reserved kinds INVALID and ERROR as ids 1 and 2, then pattern tokens
+--- sorted by name, symbols and keywords in index order, and delimited
+--- tokens sorted by name), the nfa definitions of the pattern
 --- tokens and literals, the ranks, the fragments and the ids of the
 --- delimited tokens by name.
 --- @param grammar table
@@ -121,21 +129,26 @@ local function collect_definitions(grammar)
     local tokens = rawget(grammar, 'tokens')
     local names, fragments, tables = collect_tokens(tokens)
     local defs, nfa_defs, rank = {}, {}, {}
-    for i, name in ipairs(names) do
+    for i, name in ipairs(RESERVED) do
         defs[i] = {
             id = i,
+            kind = 'reserved',
+            name = name,
+        }
+    end
+    for _, name in ipairs(names) do
+        local id = #defs + 1
+        defs[id] = {
+            id = id,
             kind = 'token',
             name = name,
-            segments = {
-                'tokens',
-                name,
-            },
+            segments = pair('tokens', name),
         }
-        nfa_defs[i] = {
-            id = i,
+        nfa_defs[#nfa_defs + 1] = {
+            id = id,
             ast = parse(rawget(tokens, name), 'tokens'),
         }
-        rank[i] = TOKEN_RANK
+        rank[id] = TOKEN_RANK
     end
     for _, field in ipairs({
         'symbols',
@@ -157,7 +170,7 @@ local function collect_definitions(grammar)
                         i,
                     },
                 }
-                nfa_defs[id] = {
+                nfa_defs[#nfa_defs + 1] = {
                     id = id,
                     literal = v,
                     ignore_case = ignore_case,
