@@ -19,7 +19,6 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 -- THE SOFTWARE.
 --
---
 -- lexogram.compile.dfa: turns the combined automaton of lexogram.compile.nfa
 -- into a minimal deterministic automaton over byte equivalence classes,
 -- with flat transition arrays for the runtime and the accept information

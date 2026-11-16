@@ -19,7 +19,6 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 -- THE SOFTWARE.
 --
---
 -- lexogram.compile.utf8range: splits a code point range into sequences of
 -- UTF-8 byte ranges, for building byte-level automata from code point
 -- classes. It follows the standard algorithm (RE2, Rust's utf8-ranges):

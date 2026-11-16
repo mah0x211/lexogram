@@ -19,7 +19,6 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 -- THE SOFTWARE.
 --
---
 -- lexogram.compile.nfa: Thompson construction of one combined
 -- non-deterministic automaton over bytes for all token definitions, cycle
 -- detection for fragment references, and a reference simulator. Every
