@@ -4,6 +4,7 @@ local lexogram = require('lexogram')
 local loader = require('lexogram.loader')
 local check = require('lexogram.check')
 local compile = require('lexogram.compile')
+local tokenizer = require('lexogram.tokenizer')
 
 -- the testcase runner executes a test file with its own directory as the
 -- working directory, so the repository root is one level up
@@ -78,4 +79,8 @@ end
 
 function testcase.compile_is_the_compile_function()
     assert.rawequal(lexogram.compile, compile.compile)
+end
+
+function testcase.tokenize_is_the_tokenize_function()
+    assert.rawequal(lexogram.tokenize, tokenizer.tokenize)
 end
