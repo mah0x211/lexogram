@@ -24,10 +24,12 @@
 -- { pos, code, message } tables and argument errors are raised. The 'tokens'
 -- context allows character classes, builtin classes and fragment references;
 -- the 'rules' context allows references to any non-reserved name and ordered
--- choice instead.
+-- choice instead. In the 'tokens' context, the names of the captures of a
+-- delimited token table may also be given; they resolve to capture nodes.
 local type = type
 local error = error
 local pcall = pcall
+local rawget = rawget
 local ipairs = ipairs
 local tostring = tostring
 local setmetatable = setmetatable
@@ -609,12 +611,29 @@ local function copy_ranges(ranges)
     return out
 end
 
+--- reject_tokens_reference raises invalid_reference for a name that is
+--- neither a builtin, a fragment nor a capture.
+--- @param p table parser state
+--- @param name string
+--- @param pos integer
+local function reject_tokens_reference(p, name, pos)
+    if p.captures then
+        fail(pos, 'invalid_reference',
+             'only fragment names (starting with "_") and capture names may' ..
+                 ' be referenced: ' .. name)
+    end
+    fail(pos, 'invalid_reference',
+         'only fragment names (starting with "_") may be referenced: ' .. name)
+end
+
 --- resolve_tokens_name returns the node for a name in the tokens context:
---- a builtin class or a fragment reference.
+--- a builtin class, a fragment reference or, if the name is in the
+--- captures table of the parser state, a capture.
+--- @param p table parser state
 --- @param name string
 --- @param pos integer
 --- @return table node
-local function resolve_tokens_name(name, pos)
+local function resolve_tokens_name(p, name, pos)
     if byte(name, 1) == UNDERSCORE then
         return {
             type = 'ref',
@@ -622,9 +641,14 @@ local function resolve_tokens_name(name, pos)
             name = name,
         }
     elseif not find(name, '^[A-Z][A-Z0-9_]*$') then
-        fail(pos, 'invalid_reference',
-             'only fragment names (starting with "_") may be referenced: ' ..
-                 name)
+        if p.captures and rawget(p.captures, name) then
+            return {
+                type = 'capture',
+                pos = pos,
+                name = name,
+            }
+        end
+        reject_tokens_reference(p, name, pos)
     elseif not BUILTINS[name] then
         fail(pos, 'unknown_builtin', 'unknown builtin class: ' .. name)
     end
@@ -638,10 +662,11 @@ end
 
 --- resolve_rules_name returns the reference node for a name in the rules
 --- context. All-uppercase names are reserved.
+--- @param _ table parser state
 --- @param name string
 --- @param pos integer
 --- @return table node
-local function resolve_rules_name(name, pos)
+local function resolve_rules_name(_, name, pos)
     if find(name, '^[A-Z][A-Z0-9_]*$') then
         fail(pos, 'reserved_name', 'all-uppercase names are reserved: ' .. name)
     end
@@ -717,7 +742,7 @@ local function scan_name(p, start)
         i = i + 1
     end
     p.pos = i
-    return p.context.resolve_name(sub(p.src, start, i - 1), start)
+    return p.context.resolve_name(p, sub(p.src, start, i - 1), start)
 end
 
 --- advance scans the next token and stores it in p.kind, p.tpos (its
@@ -878,15 +903,24 @@ end
 --- parse parses the pattern src in the given context.
 --- @param src string
 --- @param context string 'tokens' or 'rules'
+--- @param captures table? capture names of a delimited token table (tokens
+--- context only); a name n is a capture if captures[n] is truthy, and it
+--- resolves to a { type = 'capture', pos, name } node
 --- @return table? ast
 --- @return table? err { pos, code, message }
-local function parse(src, context)
+local function parse(src, context, captures)
     if type(src) ~= 'string' then
         error('src must be string, got ' .. type(src), 2)
     elseif type(context) ~= 'string' then
         error('context must be string, got ' .. type(context), 2)
     elseif not CONTEXTS[context] then
         error('unsupported context: ' .. context, 2)
+    elseif captures ~= nil then
+        if type(captures) ~= 'table' then
+            error('captures must be table, got ' .. type(captures), 2)
+        elseif context ~= 'tokens' then
+            error('captures are only allowed in the tokens context', 2)
+        end
     end
 
     local ok, res = pcall(parse_pattern, {
@@ -894,6 +928,7 @@ local function parse(src, context)
         len = #src,
         pos = 1,
         context = CONTEXTS[context],
+        captures = captures,
     })
     if ok then
         return res
