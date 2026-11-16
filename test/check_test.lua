@@ -8,8 +8,8 @@ local function valid_grammar()
         lexogram = '2026.11.15.1',
         start = 'expr',
         tokens = {
-            NUMBER = '[0-9]+',
-            COMMENT = {
+            number = '[0-9]+',
+            comment = {
                 open = '"/*"',
                 close = '"*/"',
                 body = '_text',
@@ -26,10 +26,10 @@ local function valid_grammar()
             ignore_case = true,
         },
         skip = {
-            'COMMENT',
+            'comment',
         },
         rules = {
-            expr = 'NUMBER',
+            expr = 'number',
         },
         greedy = {
             'expr',
@@ -66,7 +66,9 @@ function testcase.check_returns_empty_list_for_valid_grammar()
         lexogram = '2026.11.15.1',
         start = 'expr',
         tokens = {},
-        rules = {},
+        rules = {
+            expr = '"x"',
+        },
     }), {})
 end
 
@@ -186,34 +188,37 @@ end
 
 function testcase.check_reports_token_problems()
     assert.equal(check.check(grammar_with({
+        -- skip refers to the comment token, which these tokens replace
+        skip = {},
         tokens = {
-            A = '"a"',
-            B = 1,
-            C = true,
+            a = '"a"',
+            b = 1,
+            c = true,
             [1] = '"x"',
             [false] = '"y"',
         },
     })), {
         err('invalid_key', 'tokens[1]', 'key tokens[1] must be string'),
-        err('invalid_type', 'tokens.B',
-            'tokens.B must be string or table, got number'),
-        err('invalid_type', 'tokens.C',
-            'tokens.C must be string or table, got boolean'),
+        err('invalid_type', 'tokens.b',
+            'tokens.b must be string or table, got number'),
+        err('invalid_type', 'tokens.c',
+            'tokens.c must be string or table, got boolean'),
         err('invalid_key', 'tokens[false]', 'key tokens[false] must be string'),
     })
 end
 
 function testcase.check_reports_delimited_token_problems()
     assert.equal(check.check(grammar_with({
+        skip = {},
         tokens = {
-            NO_OPEN = {
+            no_open = {
                 close = '"x"',
             },
-            NO_CLOSE = {
+            no_close = {
                 open = '"x"',
             },
-            EMPTY = {},
-            BAD = {
+            empty = {},
+            bad = {
                 open = 1,
                 close = {},
                 capture = 2,
@@ -222,21 +227,21 @@ function testcase.check_reports_delimited_token_problems()
             },
         },
     })), {
-        err('invalid_key', 'tokens.BAD[1]', 'key tokens.BAD[1] must be string'),
-        err('invalid_type', 'tokens.BAD.capture',
-            'tokens.BAD.capture must be string, got number'),
-        err('invalid_type', 'tokens.BAD.close',
-            'tokens.BAD.close must be string, got table'),
-        err('invalid_type', 'tokens.BAD.open',
-            'tokens.BAD.open must be string, got number'),
-        err('missing_field', 'tokens.EMPTY.close',
-            'required field tokens.EMPTY.close is missing'),
-        err('missing_field', 'tokens.EMPTY.open',
-            'required field tokens.EMPTY.open is missing'),
-        err('missing_field', 'tokens.NO_CLOSE.close',
-            'required field tokens.NO_CLOSE.close is missing'),
-        err('missing_field', 'tokens.NO_OPEN.open',
-            'required field tokens.NO_OPEN.open is missing'),
+        err('invalid_key', 'tokens.bad[1]', 'key tokens.bad[1] must be string'),
+        err('invalid_type', 'tokens.bad.capture',
+            'tokens.bad.capture must be string, got number'),
+        err('invalid_type', 'tokens.bad.close',
+            'tokens.bad.close must be string, got table'),
+        err('invalid_type', 'tokens.bad.open',
+            'tokens.bad.open must be string, got number'),
+        err('missing_field', 'tokens.empty.close',
+            'required field tokens.empty.close is missing'),
+        err('missing_field', 'tokens.empty.open',
+            'required field tokens.empty.open is missing'),
+        err('missing_field', 'tokens.no_close.close',
+            'required field tokens.no_close.close is missing'),
+        err('missing_field', 'tokens.no_open.open',
+            'required field tokens.no_open.open is missing'),
     })
 end
 
@@ -245,7 +250,7 @@ end
 function testcase.check_reports_rule_problems()
     assert.equal(check.check(grammar_with({
         rules = {
-            expr = 'NUMBER',
+            expr = 'number',
             bad = 1,
             [2] = 'x',
             [true] = 'y',
@@ -423,6 +428,11 @@ end
 -- skip, greedy and recover
 
 function testcase.check_reports_name_list_problems()
+    local kinds = {
+        skip = 'token',
+        greedy = 'rule',
+        recover = 'rule',
+    }
     for _, name in ipairs({
         'skip',
         'greedy',
@@ -444,8 +454,13 @@ function testcase.check_reports_name_list_problems()
         })), {
             err('invalid_key', name .. '[0]',
                 'key ' .. name .. '[0] is not a valid array index'),
+            -- the names pass also checks every string item as a reference
+            err('undefined_reference', name .. '[1]',
+                name .. '[1] refers to undefined ' .. kinds[name] .. ' "a"'),
             err('duplicate_item', name .. '[2]',
                 name .. '[2] duplicates the item at index 1'),
+            err('undefined_reference', name .. '[2]',
+                name .. '[2] refers to undefined ' .. kinds[name] .. ' "a"'),
             err('empty_item', name .. '[3]', name .. '[3] must not be empty'),
             err('invalid_type', name .. '[4]',
                 name .. '[4] must be string, got table'),
@@ -468,7 +483,7 @@ end
 function testcase.check_renders_escaped_string_keys()
     local key = 'a"b\\c' .. string.char(1, 31, 127, 128, 255) .. ' d'
     assert.equal(check.check(grammar_with({
-        rules = {
+        symbols = {
             [key] = 1,
             ['1abc'] = 1,
             [''] = 1,
@@ -476,15 +491,12 @@ function testcase.check_renders_escaped_string_keys()
             _ok9 = 1,
         },
     })), {
-        err('invalid_type', 'rules[""]', 'rules[""] must be string, got number'),
-        err('invalid_type', 'rules["1abc"]',
-            'rules["1abc"] must be string, got number'),
-        err('invalid_type', 'rules._ok9',
-            'rules._ok9 must be string, got number'),
-        err('invalid_type', 'rules["a\\"b\\\\c\\001\\031\\127\\128\\255 d"]',
-            'rules["a\\"b\\\\c\\001\\031\\127\\128\\255 d"] must be string, got number'),
-        err('invalid_type', 'rules["a-b"]',
-            'rules["a-b"] must be string, got number'),
+        err('unknown_field', 'symbols[""]', 'unknown field symbols[""]'),
+        err('unknown_field', 'symbols["1abc"]', 'unknown field symbols["1abc"]'),
+        err('unknown_field', 'symbols._ok9', 'unknown field symbols._ok9'),
+        err('unknown_field', 'symbols["a\\"b\\\\c\\001\\031\\127\\128\\255 d"]',
+            'unknown field symbols["a\\"b\\\\c\\001\\031\\127\\128\\255 d"]'),
+        err('unknown_field', 'symbols["a-b"]', 'unknown field symbols["a-b"]'),
     })
 end
 
@@ -504,6 +516,7 @@ function testcase.check_renders_number_boolean_and_other_keys()
 
     local paths = {}
     for i, d in ipairs(check.check(grammar_with({
+        skip = {},
         tokens = tokens,
     }))) do
         assert.equal(d.code, 'invalid_key')
@@ -747,7 +760,7 @@ function testcase.check_does_not_trigger_metamethods()
     }) do
         setmetatable(grammar[name], trap())
     end
-    setmetatable(grammar.tokens.COMMENT, trap())
+    setmetatable(grammar.tokens.comment, trap())
     setmetatable(grammar, trap())
 
     assert.equal(check.check(grammar), {})
@@ -769,6 +782,7 @@ function testcase.check_handles_cyclic_tables()
     local tokens = {}
     tokens.loop = tokens
     grammar.tokens = tokens
+    grammar.skip = nil
     grammar.self = grammar
 
     assert.equal(check.check(grammar), {
@@ -813,4 +827,470 @@ function testcase.check_never_raises()
         assert.is_true(ok)
         assert.is_table(res)
     end
+end
+
+-- names pass
+
+-- a minimal valid grammar with the given fields replaced
+local function names_grammar(fields)
+    local grammar = {
+        lexogram = '2026.11.15.1',
+        start = 'expr',
+        tokens = {},
+        rules = {
+            expr = '"x"',
+        },
+    }
+    for k, v in pairs(fields) do
+        grammar[k] = v
+    end
+    return grammar
+end
+
+function testcase.check_accepts_valid_names()
+    assert.equal(check.check(names_grammar({
+        tokens = {
+            a = '"a"',
+            _a = '"b"',
+            A1b = '"c"',
+            _ABC = '"d"',
+            _ = '"e"',
+            aB_9 = '"f"',
+        },
+        rules = {
+            expr = 'a',
+            r_1 = 'expr',
+            _rule = 'expr',
+            Rule = 'expr',
+        },
+    })), {})
+end
+
+function testcase.check_reports_invalid_names()
+    local eacute = string.char(195, 169)
+    local function names()
+        return {
+            ['1a'] = '"x"',
+            ['a b'] = '"x"',
+            ['a-b'] = '"x"',
+            [''] = '"x"',
+            [eacute] = '"x"',
+        }
+    end
+
+    local expected = {}
+    for _, field in ipairs({
+        'tokens',
+        'rules',
+    }) do
+        for _, case in ipairs({
+            {
+                '[""]',
+                '""',
+            },
+            {
+                '["1a"]',
+                '"1a"',
+            },
+            {
+                '["a b"]',
+                '"a b"',
+            },
+            {
+                '["a-b"]',
+                '"a-b"',
+            },
+            {
+                '["\\195\\169"]',
+                '"\\195\\169"',
+            },
+        }) do
+            local path = field .. case[1]
+            expected[#expected + 1] = err('invalid_name', path, path .. ': ' ..
+                                              case[2] .. ' is not a valid name')
+        end
+    end
+    local rules = names()
+    rules.expr = '"x"'
+
+    assert.equal(check.check(names_grammar({
+        tokens = names(),
+        rules = rules,
+    })), expected)
+end
+
+function testcase.check_reports_reserved_names()
+    assert.equal(check.check(names_grammar({
+        tokens = {
+            NUMBER = '[0-9]+',
+            A = '"a"',
+            A_1 = '"b"',
+        },
+        rules = {
+            expr = 'NUMBER',
+            EXPR = 'expr',
+        },
+    })), {
+        err('reserved_name', 'tokens.A',
+            'tokens.A: "A" is reserved (all-uppercase names are builtins)'),
+        err('reserved_name', 'tokens.A_1',
+            'tokens.A_1: "A_1" is reserved (all-uppercase names are builtins)'),
+        err('reserved_name', 'tokens.NUMBER', 'tokens.NUMBER: "NUMBER" is ' ..
+                'reserved (all-uppercase names are builtins)'),
+        err('reserved_name', 'rules.EXPR',
+            'rules.EXPR: "EXPR" is reserved (all-uppercase names are builtins)'),
+    })
+end
+
+function testcase.check_reports_names_defined_in_tokens_and_rules()
+    assert.equal(check.check(names_grammar({
+        tokens = {
+            x = '"x"',
+            NUM = '[0-9]',
+            ['a b'] = '"y"',
+        },
+        rules = {
+            expr = 'x',
+            x = 'expr',
+            NUM = 'expr',
+            ['a b'] = 'expr',
+        },
+    })), {
+        err('reserved_name', 'tokens.NUM',
+            'tokens.NUM: "NUM" is reserved (all-uppercase names are builtins)'),
+        err('invalid_name', 'tokens["a b"]',
+            'tokens["a b"]: "a b" is not a valid name'),
+        err('reserved_name', 'rules.NUM',
+            'rules.NUM: "NUM" is reserved (all-uppercase names are builtins)'),
+        err('invalid_name', 'rules["a b"]',
+            'rules["a b"]: "a b" is not a valid name'),
+        err('duplicate_name', 'rules.x',
+            'rules.x: "x" is already defined at tokens.x'),
+    })
+end
+
+function testcase.check_reports_capture_names()
+    assert.equal(check.check(names_grammar({
+        tokens = {
+            x = '"x"',
+            str = {
+                open = '"\\""',
+                close = '"\\""',
+                body = '_text',
+                Body2 = '_text',
+                ['1x'] = '_text',
+                BODY = '_text',
+                _frag = '_text',
+                -- capture names may coincide with token and rule names
+                x = '_text',
+                expr = '_text',
+            },
+        },
+    })), {
+        err('invalid_name', 'tokens.str["1x"]',
+            'tokens.str["1x"]: "1x" is not a valid name'),
+        err('reserved_name', 'tokens.str.BODY', 'tokens.str.BODY: "BODY" is ' ..
+                'reserved (all-uppercase names are builtins)'),
+        err('invalid_name', 'tokens.str._frag',
+            'tokens.str._frag: capture name "_frag" must not start with "_",' ..
+                ' which is ambiguous with a fragment reference'),
+    })
+end
+
+function testcase.check_reports_start_references()
+    local rules = {
+        expr = '"x"',
+        _rule = 'expr',
+    }
+    local tokens = {
+        num = '[0-9]+',
+        _digits = '[0-9]+',
+    }
+    for _, case in ipairs({
+        {
+            'expr',
+            {},
+        },
+        {
+            '_rule',
+            {},
+        },
+        {
+            'chunk',
+            {
+                err('undefined_reference', 'start',
+                    'start refers to undefined rule "chunk"'),
+            },
+        },
+        {
+            'num',
+            {
+                err('invalid_reference', 'start',
+                    'start refers to "num", which is a token, not a rule'),
+            },
+        },
+        {
+            '_digits',
+            {
+                err('invalid_reference', 'start',
+                    'start refers to "_digits",' ..
+                        ' which is a fragment, not a rule'),
+            },
+        },
+    }) do
+        assert.equal(check.check(names_grammar({
+            start = case[1],
+            tokens = tokens,
+            rules = rules,
+        })), case[2])
+    end
+end
+
+function testcase.check_reports_skip_references()
+    assert.equal(check.check(names_grammar({
+        tokens = {
+            ws = '[ ]+',
+            comment = {
+                open = '"#"',
+                close = '"\\n"',
+            },
+            _digits = '[0-9]+',
+        },
+        skip = {
+            'ws',
+            'comment',
+            'nope',
+            '_digits',
+            'expr',
+            'nope',
+        },
+    })), {
+        err('undefined_reference', 'skip[3]',
+            'skip[3] refers to undefined token "nope"'),
+        err('invalid_reference', 'skip[4]',
+            'skip[4] refers to "_digits", which is a fragment, not a token'),
+        err('invalid_reference', 'skip[5]',
+            'skip[5] refers to "expr", which is a rule, not a token'),
+        err('duplicate_item', 'skip[6]',
+            'skip[6] duplicates the item at index 3'),
+        err('undefined_reference', 'skip[6]',
+            'skip[6] refers to undefined token "nope"'),
+    })
+end
+
+function testcase.check_reports_greedy_and_recover_references()
+    for _, name in ipairs({
+        'greedy',
+        'recover',
+    }) do
+        assert.equal(check.check(names_grammar({
+            tokens = {
+                ws = '[ ]+',
+                _f = '"f"',
+            },
+            rules = {
+                expr = '"x"',
+                _r = 'expr',
+            },
+            [name] = {
+                'expr',
+                '_r',
+                'nope',
+                'ws',
+                '_f',
+            },
+        })), {
+            err('undefined_reference', name .. '[3]',
+                name .. '[3] refers to undefined rule "nope"'),
+            err('invalid_reference', name .. '[4]',
+                name .. '[4] refers to "ws", which is a token, not a rule'),
+            err('invalid_reference', name .. '[5]',
+                name .. '[5] refers to "_f", which is a fragment, not a rule'),
+        })
+    end
+end
+
+function testcase.check_counts_invalid_definitions_as_defined()
+    assert.equal(check.check(names_grammar({
+        start = 'ALPHA',
+        tokens = {
+            WS = '[ ]+',
+        },
+        rules = {
+            expr = '"x"',
+            ALPHA = 'expr',
+            ['a b'] = 'expr',
+        },
+        skip = {
+            'WS',
+        },
+        greedy = {
+            'a b',
+        },
+        -- an undefined name is reported whatever its shape
+        recover = {
+            'NOPE',
+            '1x',
+        },
+    })), {
+        err('reserved_name', 'tokens.WS',
+            'tokens.WS: "WS" is reserved (all-uppercase names are builtins)'),
+        err('reserved_name', 'rules.ALPHA', 'rules.ALPHA: "ALPHA" is ' ..
+                'reserved (all-uppercase names are builtins)'),
+        err('invalid_name', 'rules["a b"]',
+            'rules["a b"]: "a b" is not a valid name'),
+        err('undefined_reference', 'recover[1]',
+            'recover[1] refers to undefined rule "NOPE"'),
+        err('undefined_reference', 'recover[2]',
+            'recover[2] refers to undefined rule "1x"'),
+    })
+end
+
+function testcase.check_treats_duplicate_name_as_both_kinds()
+    assert.equal(check.check(names_grammar({
+        start = 'x',
+        tokens = {
+            x = '"x"',
+            _f = '"f"',
+        },
+        rules = {
+            expr = '"x"',
+            x = 'expr',
+            _f = 'expr',
+        },
+        skip = {
+            'x',
+            '_f',
+        },
+        greedy = {
+            'x',
+            '_f',
+        },
+    })), {
+        err('invalid_reference', 'skip[2]', 'skip[2] refers to "_f", ' ..
+                'which is a fragment and a rule, not a token'),
+        err('duplicate_name', 'rules._f',
+            'rules._f: "_f" is already defined at tokens._f'),
+        err('duplicate_name', 'rules.x',
+            'rules.x: "x" is already defined at tokens.x'),
+    })
+end
+
+function testcase.check_names_pass_tolerates_malformed_fields()
+    -- fields of the wrong type
+    assert.equal(check.check({
+        lexogram = '2026.11.15.1',
+        start = {},
+        tokens = 'x',
+        rules = 1,
+        skip = 'a',
+        greedy = 1,
+        recover = true,
+    }), {
+        err('invalid_type', 'start', 'start must be string, got table'),
+        err('invalid_type', 'tokens', 'tokens must be table, got string'),
+        err('invalid_type', 'skip', 'skip must be table, got string'),
+        err('invalid_type', 'rules', 'rules must be table, got number'),
+        err('invalid_type', 'greedy', 'greedy must be table, got number'),
+        err('invalid_type', 'recover', 'recover must be table, got boolean'),
+    })
+
+    -- missing fields: references are not checked without tokens and rules
+    assert.equal(check.check({
+        lexogram = '2026.11.15.1',
+        start = 'nope',
+        skip = {
+            'nope',
+        },
+        greedy = {
+            'nope',
+        },
+    }), {
+        err('missing_field', 'tokens', 'required field tokens is missing'),
+        err('missing_field', 'rules', 'required field rules is missing'),
+    })
+    assert.equal(check.check(names_grammar({
+        start = 'nope',
+        tokens = 1,
+    })), {
+        err('invalid_type', 'tokens', 'tokens must be table, got number'),
+    })
+
+    -- non-string keys and items
+    assert.equal(check.check(names_grammar({
+        tokens = {
+            [1] = '"x"',
+            ws = '[ ]',
+            str = {
+                open = '"a"',
+                close = '"b"',
+                [2] = '_text',
+            },
+        },
+        rules = {
+            [true] = 'x',
+            expr = '"x"',
+        },
+        skip = {
+            1,
+            {},
+            '',
+            'ws',
+        },
+        recover = {
+            false,
+        },
+    })), {
+        err('invalid_key', 'tokens[1]', 'key tokens[1] must be string'),
+        err('invalid_key', 'tokens.str[2]', 'key tokens.str[2] must be string'),
+        err('invalid_type', 'skip[1]', 'skip[1] must be string, got number'),
+        err('invalid_type', 'skip[2]', 'skip[2] must be string, got table'),
+        err('empty_item', 'skip[3]', 'skip[3] must not be empty'),
+        err('invalid_key', 'rules[true]', 'key rules[true] must be string'),
+        err('invalid_type', 'recover[1]',
+            'recover[1] must be string, got boolean'),
+    })
+end
+
+function testcase.check_orders_structure_and_name_diagnostics()
+    assert.equal(check.check({
+        lexogram = '2026.11.15.1',
+        start = 'num',
+        tokens = {
+            num = 1,
+            WS = '[ ]',
+            ['bad name'] = '"x"',
+        },
+        symbols = {
+            '+',
+            '+',
+        },
+        skip = {
+            'expr',
+            'missing',
+        },
+        rules = {
+            expr = 'num',
+            num = 2,
+        },
+        extra = true,
+    }), {
+        -- start = 'num' is fine: num is also a rule (duplicate_name below)
+        err('reserved_name', 'tokens.WS',
+            'tokens.WS: "WS" is reserved (all-uppercase names are builtins)'),
+        err('invalid_name', 'tokens["bad name"]',
+            'tokens["bad name"]: "bad name" is not a valid name'),
+        err('invalid_type', 'tokens.num',
+            'tokens.num must be string or table, got number'),
+        err('duplicate_item', 'symbols[2]',
+            'symbols[2] duplicates the item at index 1'),
+        err('invalid_reference', 'skip[1]',
+            'skip[1] refers to "expr", which is a rule, not a token'),
+        err('undefined_reference', 'skip[2]',
+            'skip[2] refers to undefined token "missing"'),
+        err('duplicate_name', 'rules.num',
+            'rules.num: "num" is already defined at tokens.num'),
+        err('invalid_type', 'rules.num', 'rules.num must be string, got number'),
+        err('unknown_field', 'extra', 'unknown field extra'),
+    })
 end

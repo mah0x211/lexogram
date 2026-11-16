@@ -39,6 +39,13 @@ local floor = math.floor
 local byte_less = require('lexogram.compat').byte_less
 local resolve_version = require('lexogram.version').resolve
 
+-- Name patterns. They mirror lexogram.pattern: a name is what its scanner
+-- accepts as a name, and an all-uppercase name is a builtin class there.
+local NAME_PATTERN = '^[A-Za-z_][A-Za-z0-9_]*$'
+local RESERVED_PATTERN = '^[A-Z][A-Z0-9_]*$'
+-- Byte value of "_", which starts a fragment name.
+local UNDERSCORE = 95
+
 -- Integral number keys in [-2^63, 2^63) are formatted with %d, which
 -- every runtime supports in that range (as a 64-bit integer).
 local INTEGER_LIMIT = 2 ^ 63
@@ -113,7 +120,7 @@ end
 local function key_segment(k, first)
     local t = type(k)
     if t == 'string' then
-        if not find(k, '^[A-Za-z_][A-Za-z0-9_]*$') then
+        if not find(k, NAME_PATTERN) then
             return '["' .. escape_key(k) .. '"]'
         elseif first then
             return k
@@ -395,6 +402,20 @@ local function is_positive_integer(k)
     return type(k) == 'number' and k >= 1 and k == floor(k)
 end
 
+--- array_length returns the number of positive integer keys of tbl, which
+--- is the length of its array part when the array has no hole.
+--- @param tbl table
+--- @return integer n
+local function array_length(tbl)
+    local n = 0
+    for k in next, tbl do
+        if is_positive_integer(k) then
+            n = n + 1
+        end
+    end
+    return n
+end
+
 --- scan_array_keys checks the keys of an array table and returns the
 --- length n of its array part (keys 1..n). String keys are passed to
 --- on_string_key; other keys that are not in 1..n are invalid_key.
@@ -404,12 +425,7 @@ end
 --- @param on_string_key function(ctx, segments, key, value)
 --- @return integer n
 local function scan_array_keys(ctx, segments, tbl, on_string_key)
-    local n = 0
-    for k in next, tbl do
-        if is_positive_integer(k) then
-            n = n + 1
-        end
-    end
+    local n = array_length(tbl)
 
     for k, v in next, tbl do
         local segs = child(segments, k)
@@ -635,10 +651,216 @@ local function check_structure(ctx)
     end
 end
 
+-- names pass
+
+--- quote returns the string s in double quotes, escaped like a path key.
+--- @param s string
+--- @return string
+local function quote(s)
+    return '"' .. escape_key(s) .. '"'
+end
+
+--- table_field returns the field name of grammar if it is a table, or nil.
+--- @param grammar table
+--- @param name string
+--- @return table?
+local function table_field(grammar, name)
+    local v = rawget(grammar, name)
+    if type(v) == 'table' then
+        return v
+    end
+    return nil
+end
+
+--- check_name_shape adds invalid_name or reserved_name for the name at
+--- segments and returns true if the name is valid and not reserved.
+--- @param ctx table
+--- @param segments any[]
+--- @param name string
+--- @return boolean
+local function check_name_shape(ctx, segments, name)
+    if not find(name, NAME_PATTERN) then
+        add_error(ctx, 'invalid_name', segments, label(segments) .. ': ' ..
+                      quote(name) .. ' is not a valid name')
+        return false
+    elseif find(name, RESERVED_PATTERN) then
+        add_error(ctx, 'reserved_name', segments,
+                  label(segments) .. ': ' .. quote(name) ..
+                      ' is reserved (all-uppercase names are builtins)')
+        return false
+    end
+    return true
+end
+
+--- check_captures checks the capture names of a delimited token table.
+--- @param ctx table
+--- @param segments any[]
+--- @param tbl table
+local function check_captures(ctx, segments, tbl)
+    for k in next, tbl do
+        if type(k) == 'string' and k ~= 'open' and k ~= 'close' then
+            local segs = child(segments, k)
+            if byte(k, 1) == UNDERSCORE then
+                add_error(ctx, 'invalid_name', segs,
+                          label(segs) .. ': capture name ' .. quote(k) ..
+                              ' must not start with "_", which is' ..
+                              ' ambiguous with a fragment reference')
+            else
+                check_name_shape(ctx, segs, k)
+            end
+        end
+    end
+end
+
+--- define records that name is defined with the given kind.
+--- @param kinds table name -> set of kinds
+--- @param name string
+--- @param kind string 'token', 'fragment' or 'rule'
+local function define(kinds, name, kind)
+    local set = kinds[name]
+    if not set then
+        set = {}
+        kinds[name] = set
+    end
+    set[kind] = true
+end
+
+--- collect_tokens checks the names of tokens and records their kinds.
+--- @param ctx table
+--- @param tokens table
+--- @param kinds table
+local function collect_tokens(ctx, tokens, kinds)
+    for k, v in next, tokens do
+        if type(k) == 'string' then
+            local segs = child(ctx.tokens_segments, k)
+            check_name_shape(ctx, segs, k)
+            define(kinds, k, byte(k, 1) == UNDERSCORE and 'fragment' or 'token')
+            if type(v) == 'table' then
+                check_captures(ctx, segs, v)
+            end
+        end
+    end
+end
+
+--- collect_rules checks the names of rules, reports names also defined in
+--- tokens and records their kinds.
+--- @param ctx table
+--- @param rules table
+--- @param tokens table?
+--- @param kinds table
+local function collect_rules(ctx, rules, tokens, kinds)
+    for k in next, rules do
+        if type(k) == 'string' then
+            local segs = child(ctx.rules_segments, k)
+            if check_name_shape(ctx, segs, k) and tokens and rawget(tokens, k) ~=
+                nil then
+                add_error(ctx, 'duplicate_name', segs,
+                          label(segs) .. ': ' .. quote(k) ..
+                              ' is already defined at ' ..
+                              path_string(child(ctx.tokens_segments, k)))
+            end
+            define(kinds, k, 'rule')
+        end
+    end
+end
+
+-- Kinds in the order they are named in messages.
+local KIND_ORDER = {
+    'token',
+    'fragment',
+    'rule',
+}
+
+--- describe_kinds returns the kinds in set, each with "a", joined with
+--- " and " (e.g. "a fragment and a rule").
+--- @param set table
+--- @return string
+local function describe_kinds(set)
+    local names = {}
+    for i = 1, #KIND_ORDER do
+        if set[KIND_ORDER[i]] then
+            names[#names + 1] = 'a ' .. KIND_ORDER[i]
+        end
+    end
+    return concat(names, ' and ')
+end
+
+--- check_reference checks that the name referenced at segments is defined
+--- with the expected kind.
+--- @param ctx table
+--- @param segments any[]
+--- @param name string
+--- @param expected string 'token' or 'rule'
+local function check_reference(ctx, segments, name, expected)
+    local set = ctx.kinds[name]
+    if not set then
+        add_error(ctx, 'undefined_reference', segments, label(segments) ..
+                      ' refers to undefined ' .. expected .. ' ' .. quote(name))
+    elseif not set[expected] then
+        add_error(ctx, 'invalid_reference', segments,
+                  label(segments) .. ' refers to ' .. quote(name) ..
+                      ', which is ' .. describe_kinds(set) .. ', not a ' ..
+                      expected)
+    end
+end
+
+--- check_reference_list checks the string items of the array field name.
+--- @param ctx table
+--- @param name string
+--- @param expected string 'token' or 'rule'
+local function check_reference_list(ctx, name, expected)
+    local list = table_field(ctx.grammar, name)
+    if not list then
+        return
+    end
+    local segments = child(ROOT, name)
+    for i = 1, array_length(list) do
+        local v = rawget(list, i)
+        if type(v) == 'string' and v ~= '' then
+            check_reference(ctx, child(segments, i), v, expected)
+        end
+    end
+end
+
+--- check_names checks definition names, the shared namespace of tokens and
+--- rules, capture names and the plain references in start, skip, greedy
+--- and recover. Malformed fields, keys and items are skipped silently; the
+--- structure pass reports them. References are not checked unless both
+--- tokens and rules are tables.
+--- @param ctx table
+local function check_names(ctx)
+    local grammar = ctx.grammar
+    local tokens = table_field(grammar, 'tokens')
+    local rules = table_field(grammar, 'rules')
+    ctx.tokens_segments = child(ROOT, 'tokens')
+    ctx.rules_segments = child(ROOT, 'rules')
+    ctx.kinds = {}
+    if tokens then
+        collect_tokens(ctx, tokens, ctx.kinds)
+    end
+    if rules then
+        collect_rules(ctx, rules, tokens, ctx.kinds)
+    end
+
+    -- references are checked only against a complete namespace; with tokens
+    -- or rules malformed every reference could be reported as undefined
+    if not tokens or not rules then
+        return
+    end
+    local start = rawget(grammar, 'start')
+    if type(start) == 'string' then
+        check_reference(ctx, child(ROOT, 'start'), start, 'rule')
+    end
+    check_reference_list(ctx, 'skip', 'token')
+    check_reference_list(ctx, 'greedy', 'rule')
+    check_reference_list(ctx, 'recover', 'rule')
+end
+
 -- Passes run in order over the shared context of a grammar table. Later
--- passes (name rules, pattern checks) are appended here.
+-- passes (pattern checks) are appended here.
 local PASSES = {
     check_structure,
+    check_names,
 }
 
 --- check checks grammar and returns its diagnostics, sorted. It never
