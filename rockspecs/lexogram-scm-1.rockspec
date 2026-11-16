@@ -17,6 +17,7 @@ build = {
     type = "builtin",
     modules = {
         ["lexogram"] = "lib/lexogram.lua",
+        ["lexogram.check"] = "lib/check.lua",
         ["lexogram.compat"] = "lib/compat.lua",
         ["lexogram.loader"] = "lib/loader.lua",
         ["lexogram.pattern"] = "lib/pattern.lua",

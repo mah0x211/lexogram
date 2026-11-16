@@ -167,6 +167,67 @@ function testcase.load_text_raises_error_on_invalid_env()
     assert.match(err, 'env must be table, got string')
 end
 
+-- byte_less
+
+function testcase.byte_less_compares_strings_in_byte_order()
+    for _, case in ipairs({
+        {
+            'a',
+            'b',
+            true,
+        },
+        {
+            'b',
+            'a',
+            false,
+        },
+        {
+            'a',
+            'a',
+            false,
+        },
+        {
+            '',
+            'a',
+            true,
+        },
+        {
+            'a',
+            '',
+            false,
+        },
+        -- a prefix sorts first
+        {
+            'ab',
+            'abc',
+            true,
+        },
+        {
+            'abc',
+            'ab',
+            false,
+        },
+        -- upper case letters have smaller byte values
+        {
+            'Z',
+            'a',
+            true,
+        },
+        {
+            'a' .. string.char(0),
+            'a' .. string.char(1),
+            true,
+        },
+        {
+            string.char(127),
+            string.char(128),
+            true,
+        },
+    }) do
+        assert.equal(compat.byte_less(case[1], case[2]), case[3])
+    end
+end
+
 -- sorted_keys
 
 function testcase.sorted_keys_returns_numbers_before_strings()
