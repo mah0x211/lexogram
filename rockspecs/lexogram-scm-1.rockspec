@@ -29,6 +29,7 @@ build = {
         ["lexogram.loader"] = "lib/loader.lua",
         ["lexogram.pattern"] = "lib/pattern.lua",
         ["lexogram.text"] = "lib/text.lua",
+        ["lexogram.tokenizer"] = "lib/tokenizer.lua",
         ["lexogram.utf8"] = "lib/utf8.lua",
         ["lexogram.version"] = "lib/version.lua",
     },
