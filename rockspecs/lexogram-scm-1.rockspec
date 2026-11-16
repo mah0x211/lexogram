@@ -16,8 +16,8 @@ dependencies = {
 build = {
     type = "builtin",
     modules = {
-        ["lexogram"] = "lua/lexogram.lua",
-        ["lexogram.compat"] = "lua/lexogram/compat.lua",
-        ["lexogram.utf8"] = "lua/lexogram/utf8.lua",
+        ["lexogram"] = "lib/lexogram.lua",
+        ["lexogram.compat"] = "lib/compat.lua",
+        ["lexogram.utf8"] = "lib/utf8.lua",
     },
 }
