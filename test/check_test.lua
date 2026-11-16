@@ -31,9 +31,6 @@ local function valid_grammar()
         rules = {
             expr = 'number (("+" / "-") number)* / "if" expr "else" expr',
         },
-        greedy = {
-            'expr',
-        },
         recover = {
             'expr',
         },
@@ -77,9 +74,11 @@ function testcase.check_returns_empty_list_for_valid_grammar()
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
         start = 'expr',
-        tokens = {},
+        tokens = {
+            n = 'DIGIT+',
+        },
         rules = {
-            expr = 'expr',
+            expr = 'n',
         },
     }), {})
 end
@@ -1049,7 +1048,7 @@ end
 function testcase.check_reports_start_references()
     -- every definition is used, so the valid cases have no warning
     local rules = {
-        expr = 'num _rule "x"',
+        expr = 'num _rule? "x"',
         _rule = 'expr',
     }
     local tokens = {
@@ -1388,9 +1387,6 @@ local function lua_like_grammar()
             _last = '"return" expr',
             expr = 'number | long_string | name | "nil"',
         },
-        greedy = {
-            'args',
-        },
         recover = {
             'stat',
         },
@@ -1651,7 +1647,7 @@ function testcase.check_reports_unreachable_rules()
             -- retval is reachable only through the _last rule
             _last = '"return" retval',
             retval = 'expr',
-            orphan_a = 'orphan_b',
+            orphan_a = '"(" orphan_b ")" | call',
             orphan_b = 'orphan_a call',
         },
     })
@@ -1865,4 +1861,94 @@ function testcase.check_reports_delimited_errors_with_other_diagnostics()
            'tokens.bad.open may refer to only one capture, but refers to' ..
                ' "a" again'),
     })
+end
+
+-- syntax pass
+
+function testcase.check_runs_syntax_pass_only_without_errors()
+    -- an ambiguous choice is reported
+    assert.equal(check.check(lua_like({
+        rules = {
+            expr = 'number | long_string | name | "nil" | name',
+        },
+    })), {
+        at('ambiguous_choice', 'rules.expr', 1, 'rules.expr: alternatives 3' ..
+               ' and 5 of the choice can both start with name end of input'),
+    })
+    -- a lexical error stops before the syntax pass
+    assert.equal(check.check(lua_like({
+        tokens = {
+            empty = '"#"*',
+        },
+        rules = {
+            expr = 'number | long_string | name | "nil" | name',
+        },
+    })), {
+        err('empty_match', 'tokens.empty',
+            'tokens.empty matches the empty string'),
+        warn('unused_token', 'tokens.empty',
+             'tokens.empty is not used by any rule and not listed in skip'),
+    })
+end
+
+function testcase.check_accepts_realistic_syntax()
+    assert.equal(check.check({
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '(ALPHA | "_") (ALPHA | DIGIT | "_")*',
+            number = 'DIGIT+ ("." DIGIT+)?',
+            string = '"\\"" [^"\\n]* "\\""',
+            space = '[ \\t\\n]+',
+        },
+        symbols = {
+            '=',
+            '(',
+            ')',
+            '{',
+            '}',
+            ',',
+            ';',
+            '+',
+            '-',
+            '*',
+            '..',
+            '==',
+            '[',
+            ']',
+            '.',
+        },
+        keywords = {
+            'local',
+            'if',
+            'then',
+            'end',
+            'while',
+            'do',
+            'return',
+            'not',
+            'nil',
+            'and',
+            'or',
+        },
+        skip = {
+            'space',
+        },
+        rules = {
+            chunk = 'stat* laststat?',
+            laststat = '"return" exp?',
+            stat = '"local" name "=" exp | "if" exp "then" chunk "end"' ..
+                ' | "while" exp "do" chunk "end" | exprstat | ";"',
+            exprstat = 'prefix ("=" exp)?',
+            prefix = 'name suffix*',
+            suffix = '"." name | "[" exp "]" | args',
+            args = '"(" (exp ("," exp)*)? ")"',
+            exp = 'unop* term (binop unop* term)*',
+            unop = '"-" | "not"',
+            binop = '"+" | "-" | "*" | ".." | "==" | "and" | "or"',
+            term = 'number | string | "nil" | prefix | constructor',
+            constructor = '"{" (field (("," | ";") field)*)? "}"',
+            field = 'name "=" exp | exp | "[" exp "]" "=" exp',
+        },
+    }), {})
 end

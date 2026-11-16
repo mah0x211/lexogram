@@ -25,8 +25,9 @@
 -- over a shared context; each pass appends diagnostics, which are sorted
 -- into a deterministic order at the end. The passes are: structure (field
 -- shapes), names (definitions and plain references), patterns (parsing,
--- references, literals and usage warnings) and lexical (the token
--- automaton, run only when the earlier passes found no error).
+-- references, literals and usage warnings), lexical (the token automaton)
+-- and syntax (lookahead decisions); the last two run only when the earlier
+-- passes found no error.
 local type = type
 local next = next
 local rawget = rawget
@@ -45,6 +46,7 @@ local text = require('lexogram.text')
 local escape_key = text.escape
 local quote = text.quote
 local build_lexer = require('lexogram.compile.lexer').build
+local analyze_syntax = require('lexogram.compile.syntax').analyze
 local parse_pattern = require('lexogram.pattern').parse
 
 -- Name patterns. They mirror lexogram.pattern: a name is what its scanner
@@ -1235,7 +1237,24 @@ local function check_lexical(ctx)
     if has_error(ctx) then
         return
     end
-    local _, diagnostics = build_lexer(ctx.grammar)
+    local result, diagnostics = build_lexer(ctx.grammar)
+    ctx.lexer = result
+    for _, d in ipairs(diagnostics) do
+        add(ctx, d.severity, d.code, d.segments, d.pos, d.message)
+    end
+end
+
+-- syntax pass
+
+--- check_syntax computes the lookahead decisions of the rules and adds the
+--- syntax diagnostics. It runs only for a grammar without errors whose
+--- token automaton was built.
+--- @param ctx table
+local function check_syntax(ctx)
+    if has_error(ctx) or not ctx.lexer then
+        return
+    end
+    local _, diagnostics = analyze_syntax(ctx.grammar, ctx.lexer)
     for _, d in ipairs(diagnostics) do
         add(ctx, d.severity, d.code, d.segments, d.pos, d.message)
     end
@@ -1247,6 +1266,7 @@ local PASSES = {
     check_names,
     check_patterns,
     check_lexical,
+    check_syntax,
 }
 
 --- check checks grammar and returns its diagnostics, sorted. It never

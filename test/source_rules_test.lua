@@ -133,6 +133,7 @@ function testcase.module_files_lists_rockspec_modules()
         'lib/compile/limits.lua',
         'lib/compile/ll.lua',
         'lib/compile/nfa.lua',
+        'lib/compile/syntax.lua',
         'lib/compile/utf8range.lua',
         'lib/loader.lua',
         'lib/pattern.lua',
