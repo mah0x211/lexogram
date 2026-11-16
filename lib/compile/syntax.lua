@@ -521,11 +521,14 @@ local function check_greedy(ctx)
         if not listed[spot.rule] then
             add_diagnostic(ctx, 'warning', 'undeclared_greedy',
                            pair('rules', spot.rule), spot.node.pos,
-                           'rules.' .. spot.rule ..
-                               ': the repetition can both continue and end' ..
+                           'rules.' .. spot.rule .. ': the ' ..
+                               (spot.node.type == 'opt' and
+                                   'optional element can both be taken and' ..
+                                   ' skipped' or
+                                   'repetition can both continue and end') ..
                                ' with ' .. render(ctx.names_of, spot.example) ..
                                '; rewrite the rule or add ' .. spot.rule ..
-                               ' to greedy to always continue')
+                               ' to greedy to always take the element')
         end
     end
     for i = 1, #list do

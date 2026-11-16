@@ -1254,7 +1254,8 @@ local function check_syntax(ctx)
     if has_error(ctx) or not ctx.lexer then
         return
     end
-    local _, diagnostics = analyze_syntax(ctx.grammar, ctx.lexer)
+    local result, diagnostics = analyze_syntax(ctx.grammar, ctx.lexer)
+    ctx.syntax = result
     for _, d in ipairs(diagnostics) do
         add(ctx, d.severity, d.code, d.segments, d.pos, d.message)
     end
@@ -1269,11 +1270,15 @@ local PASSES = {
     check_syntax,
 }
 
---- check checks grammar and returns its diagnostics, sorted. It never
---- raises.
+--- run checks grammar and returns its sorted diagnostics together with the
+--- results of the lexical and syntax passes, which lexogram.compile reuses
+--- instead of building them again. It never raises. It is internal to the
+--- library; use check.
 --- @param grammar any
 --- @return table[] diagnostics { severity, code, path, pos, message }
-local function check(grammar)
+--- @return table? lexer result of lexogram.compile.lexer.build, if built
+--- @return table? syntax result of lexogram.compile.syntax.analyze, if built
+local function run(grammar)
     local ctx = {
         grammar = grammar,
         diagnostics = {},
@@ -1296,9 +1301,18 @@ local function check(grammar)
             message = d.message,
         }
     end
-    return out
+    return out, ctx.lexer, ctx.syntax
+end
+
+--- check checks grammar and returns its diagnostics, sorted. It never
+--- raises.
+--- @param grammar any
+--- @return table[] diagnostics { severity, code, path, pos, message }
+local function check(grammar)
+    return (run(grammar))
 end
 
 return {
     check = check,
+    run = run,
 }

@@ -20,6 +20,7 @@ build = {
         ["lexogram.check"] = "lib/check.lua",
         ["lexogram.compat"] = "lib/compat.lua",
         ["lexogram.compile"] = "lib/compile.lua",
+        ["lexogram.compile.codegen"] = "lib/compile/codegen.lua",
         ["lexogram.compile.delimited"] = "lib/compile/delimited.lua",
         ["lexogram.compile.dfa"] = "lib/compile/dfa.lua",
         ["lexogram.compile.lexer"] = "lib/compile/lexer.lua",

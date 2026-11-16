@@ -235,6 +235,28 @@ local function dangling_else(greedy)
     })
 end
 
+function testcase.analyze_words_repetition_greedy_spots()
+    local _, diagnostics = analyze(grammar({
+        symbols = {
+            'x',
+            'y',
+            'z',
+        },
+        rules = {
+            s = '("x" "y")* "x" "y" "z"',
+        },
+    }))
+
+    assert.equal(diagnostics, {
+        at('warning', 'undeclared_greedy', {
+            'rules',
+            's',
+        }, 2, 'rules.s: the repetition can both continue and end with' ..
+               ' "x" "y"; rewrite the rule or add s to greedy to always' ..
+               ' take the element'),
+    })
+end
+
 function testcase.analyze_warns_about_undeclared_greedy_spots()
     local result, diagnostics, ids = analyze(dangling_else())
 
@@ -242,9 +264,9 @@ function testcase.analyze_warns_about_undeclared_greedy_spots()
         at('warning', 'undeclared_greedy', {
             'rules',
             'stat',
-        }, 24, 'rules.stat: the repetition can both continue and end with' ..
-               ' "else" ";"; rewrite the rule or add stat to greedy to always' ..
-               ' continue'),
+        }, 24, 'rules.stat: the optional element can both be taken and' ..
+               ' skipped with "else" ";"; rewrite the rule or add stat to' ..
+               ' greedy to always take the element'),
     })
     local opt = result.rules.stat.items[1].items[5]
     local decision = result.decisions[opt]

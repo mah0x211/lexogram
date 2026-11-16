@@ -20,8 +20,8 @@
 -- THE SOFTWARE.
 --
 -- lexogram.compile: compiles a grammar table into plain data for the
--- tokenizer (the syntax part is added by a later version). compile(grammar)
--- runs lexogram.check first; with any error it returns nil and the
+-- tokenizer and the analyzer. compile(grammar) runs lexogram.check first
+-- (and reuses the automaton and decisions it built); with any error it returns nil and the
 -- diagnostics, otherwise the compiled object and the diagnostics (only
 -- warnings, possibly none). It never raises.
 --
@@ -36,10 +36,12 @@
 --                   matches no token
 --               2 = { name = 'ERROR', category = 'error' }: an error span
 --               then pattern tokens (by name), symbols and keywords (by
---               index) and delimited tokens (by name). category is
---               'token' (also for delimited tokens), 'symbol', 'keyword'
---               or 'error'; skip is true for tokens listed in skip.
---   names     map from token names and the reserved names to kind ids
+--               index), delimited tokens (by name) and the rules whose
+--               names do not start with "_" (by name). category is
+--               'token' (also for delimited tokens), 'symbol', 'keyword',
+--               'rule' or 'error'; skip is true for tokens listed in skip.
+--   names     map from token names, rule names (rules with a kind) and the
+--             reserved names to kind ids
 --   literals  map from literal strings (as declared) to kind ids
 --   lexer     the token automaton:
 --     nclasses, classes  classes[b + 1] is the class (1..nclasses) of byte b
@@ -68,13 +70,24 @@
 -- input). Otherwise the longest prefix accepted by lexer wins, with the
 -- kind accept[s] of its final state; a byte that starts no token is
 -- INVALID.
+--
+--   syntax    the rules as instructions (see lexogram.compile.codegen for
+--             the instruction set and the shape of each construct):
+--     start      index of the start rule in rules; the input must end after
+--                it (the next token is the end of input, kind 0)
+--     rules      array, by rule name, of { name, kind, entry }: kind is the
+--                kind id emitted by ENTER and EXIT, or 0 for a rule whose
+--                name starts with "_" (no events); entry is its address
+--     code       flat array of opcodes and operands
+--     decisions  array of decision tables used by SWITCH, TEST and TRY;
+--                maps keyed by kind ids, 0 being the end of input
 local type = type
 local next = next
 local rawget = rawget
 local ipairs = ipairs
-local check = require('lexogram.check').check
+local run_check = require('lexogram.check').run
+local generate = require('lexogram.compile.codegen').generate
 local resolve_version = require('lexogram.version').resolve
-local build_lexer = require('lexogram.compile.lexer').build
 
 -- Category of each definition kind of lexogram.compile.lexer.
 local CATEGORY = {
@@ -152,12 +165,13 @@ end
 
 --- build_object returns the compiled object of a grammar without errors.
 --- @param grammar table
---- @param result table result of lexogram.compile.lexer.build
+--- @param lexer table result of lexogram.compile.lexer.build
+--- @param syntax table result of lexogram.compile.syntax.analyze
 --- @return table
-local function build_object(grammar, result)
+local function build_object(grammar, lexer, syntax)
     local skipped = skipped_names(grammar)
     local kinds, names, literals = {}, {}, {}
-    for _, def in ipairs(result.defs) do
+    for _, def in ipairs(lexer.defs) do
         local category = CATEGORY[def.kind]
         kinds[def.id] = {
             name = def.name,
@@ -170,32 +184,44 @@ local function build_object(grammar, result)
             names[def.name] = def.id
         end
     end
-    local lexer = automaton(result.dfa)
-    lexer.open = automaton(result.delimited.open)
-    lexer.delimited = delimited_entries(result.defs, result.delimited.tokens)
+    local code, rule_kinds = generate(syntax, rawget(grammar, 'start'),
+                                      #kinds + 1)
+    for _, kind in ipairs(rule_kinds) do
+        kinds[kind.id] = {
+            name = kind.name,
+            category = 'rule',
+            skip = false,
+        }
+        names[kind.name] = kind.id
+    end
+    local automata = automaton(lexer.dfa)
+    automata.open = automaton(lexer.delimited.open)
+    automata.delimited = delimited_entries(lexer.defs, lexer.delimited.tokens)
     return {
         lexogram = resolve_version(rawget(grammar, 'lexogram')),
         kinds = kinds,
         names = names,
         literals = literals,
-        lexer = lexer,
+        lexer = automata,
+        syntax = code,
     }
 end
 
 --- compile compiles grammar. It returns nil and the diagnostics of
 --- lexogram.check when there is an error, otherwise the compiled object
---- and the diagnostics (warnings only). It never raises.
+--- and the diagnostics (warnings only). It reuses the token automaton and
+--- the lookahead decisions that the check built. It never raises.
 --- @param grammar any
 --- @return table? compiled
 --- @return table[] diagnostics
 local function compile(grammar)
-    local diagnostics = check(grammar)
+    local diagnostics, lexer, syntax = run_check(grammar)
     for _, d in ipairs(diagnostics) do
         if d.severity == 'error' then
             return nil, diagnostics
         end
     end
-    return build_object(grammar, (build_lexer(grammar))), diagnostics
+    return build_object(grammar, lexer, syntax), diagnostics
 end
 
 return {
