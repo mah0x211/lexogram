@@ -69,7 +69,8 @@ function testcase.grammar_compiles_without_diagnostics()
     assert.equal(DIAGNOSTICS, {})
     assert.is_table(COMPILED)
     assert.is_table(GRAMMAR)
-    assert.equal(#COMPILED.kinds, 2 + 5 + 26 + 21 + 2)
+    -- reserved, pattern tokens, symbols, keywords, delimited tokens, rules
+    assert.equal(#COMPILED.kinds, 2 + 5 + 26 + 21 + 2 + 2)
 end
 
 function testcase.numbers()

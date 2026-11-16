@@ -10,7 +10,7 @@ local function compiled_of(fields)
         lexogram = '2026.11.15.1',
         start = 'chunk',
         rules = {
-            chunk = 'chunk',
+            chunk = 'name*',
         },
     }
     for k, v in pairs(fields) do

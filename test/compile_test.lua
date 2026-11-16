@@ -180,6 +180,12 @@ local function plain_data_problems(v)
                 if tk ~= 'string' and tk ~= 'number' then
                     problems[#problems + 1] = 'key of type ' .. tk
                 end
+                -- every number is an integer; a float (Lua 5.3 and later)
+                -- would make the object differ between runtimes
+                if math.type and
+                    (math.type(k) == 'float' or math.type(x) == 'float') then
+                    problems[#problems + 1] = 'float number'
+                end
                 if tx == 'table' then
                     stack[#stack + 1] = x
                 elseif tx ~= 'string' and tx ~= 'number' and tx ~= 'boolean' then
@@ -276,6 +282,21 @@ function testcase.compile_returns_kinds_names_and_literals()
             category = 'token',
             skip = false,
         },
+        {
+            name = 'chunk',
+            category = 'rule',
+            skip = false,
+        },
+        {
+            name = 'stat',
+            category = 'rule',
+            skip = false,
+        },
+        {
+            name = 'value',
+            category = 'rule',
+            skip = false,
+        },
     })
     assert.equal(compiled.names, {
         INVALID = 1,
@@ -284,6 +305,9 @@ function testcase.compile_returns_kinds_names_and_literals()
         number = 4,
         space = 5,
         long_string = 10,
+        chunk = 11,
+        stat = 12,
+        value = 13,
     })
     -- the keyword "name" does not clash with the token name
     assert.equal(compiled.literals, {
@@ -378,6 +402,14 @@ function testcase.compile_finds_shared_tables_in_test_helper()
         'metatable',
         'value of type function',
     })
+    -- floats exist as a separate subtype only on Lua 5.3 and later
+    if math.type then
+        assert.equal(plain_data_problems({
+            n = 1.5,
+        }), {
+            'float number',
+        })
+    end
 end
 
 -- a metatable whose metamethods raise if they are ever triggered
