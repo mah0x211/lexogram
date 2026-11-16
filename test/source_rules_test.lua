@@ -126,6 +126,7 @@ function testcase.module_files_lists_rockspec_modules()
         'lib/lexogram.lua',
         'lib/check.lua',
         'lib/compat.lua',
+        'lib/compile/dfa.lua',
         'lib/compile/nfa.lua',
         'lib/compile/utf8range.lua',
         'lib/loader.lua',
