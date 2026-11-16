@@ -128,6 +128,7 @@ function testcase.module_files_lists_rockspec_modules()
         'lib/loader.lua',
         'lib/pattern.lua',
         'lib/utf8.lua',
+        'lib/version.lua',
     })
 end
 
