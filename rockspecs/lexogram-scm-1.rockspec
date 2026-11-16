@@ -18,6 +18,7 @@ build = {
     modules = {
         ["lexogram"] = "lib/lexogram.lua",
         ["lexogram.compat"] = "lib/compat.lua",
+        ["lexogram.pattern"] = "lib/pattern.lua",
         ["lexogram.utf8"] = "lib/utf8.lua",
     },
 }

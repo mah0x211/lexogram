@@ -125,6 +125,7 @@ function testcase.module_files_lists_rockspec_modules()
     assert.equal(files, {
         'lib/lexogram.lua',
         'lib/compat.lua',
+        'lib/pattern.lua',
         'lib/utf8.lua',
     })
 end
