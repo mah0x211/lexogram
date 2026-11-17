@@ -5,5 +5,6 @@ include_files = {
     'grammars/**/*.lua',
     'lib/**/*.lua',
     'test/**/*_test.lua',
+    'tools/**/*.lua',
 }
 ignore = {}
