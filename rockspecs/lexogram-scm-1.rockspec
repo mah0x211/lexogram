@@ -34,6 +34,7 @@ build = {
         ["lexogram.extend"] = "lib/extend.lua",
         ["lexogram.loader"] = "lib/loader.lua",
         ["lexogram.pattern"] = "lib/pattern.lua",
+        ["lexogram.source"] = "lib/source.lua",
         ["lexogram.text"] = "lib/text.lua",
         ["lexogram.tokenizer"] = "lib/tokenizer.lua",
         ["lexogram.utf8"] = "lib/utf8.lua",

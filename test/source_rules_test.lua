@@ -141,6 +141,7 @@ function testcase.module_files_lists_rockspec_modules()
         'lib/extend.lua',
         'lib/loader.lua',
         'lib/pattern.lua',
+        'lib/source.lua',
         'lib/text.lua',
         'lib/tokenizer.lua',
         'lib/utf8.lua',

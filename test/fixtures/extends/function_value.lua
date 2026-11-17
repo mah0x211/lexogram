@@ -1,0 +1,5 @@
+return {
+    tokens = {
+        f = pairs,
+    },
+}
