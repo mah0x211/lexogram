@@ -49,6 +49,9 @@
 --                        state s and a byte of class c; 0 is the dead state
 --                        (no transition). The start state is 1.
 --     accept             accept[s] is the kind id accepted in state s, or 0
+--     leading            an automaton of the same shape over the leading
+--                        tokens (listed in leading), which the automaton
+--                        above does not have; absent without them
 --     open               an automaton of the same shape over the opens of
 --                        the delimited tokens; accept holds indexes into
 --                        delimited
@@ -70,8 +73,10 @@
 --                                   or for a prefixed table the entry of the
 --                                   named table)
 --
--- Tokenizing: at a position, if the open automaton accepts a non-empty
--- prefix, the entry of delimited with the longest open wins. After its open
+-- Tokenizing: at the start of input, if the leading automaton accepts a
+-- non-empty prefix, the longest one is the token. Otherwise, at a
+-- position, if the open automaton accepts a non-empty prefix, the entry of
+-- delimited with the longest open wins. After its open
 -- matched at pos, the capture starts at pos + prefix and ends where the
 -- capture automaton, run greedily from there, has no transition. The close
 -- string is the concatenation of the close parts with the captured bytes
@@ -205,6 +210,7 @@ local function build_object(grammar, lexer, syntax)
         names[kind.name] = kind.id
     end
     local automata = automaton(lexer.dfa)
+    automata.leading = lexer.leading and automaton(lexer.leading)
     automata.open = automaton(lexer.delimited.open)
     automata.delimited = delimited_entries(lexer.delimited.entries)
     return {

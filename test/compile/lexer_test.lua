@@ -378,6 +378,142 @@ function testcase.build_reports_no_warning_with_errors()
     })
 end
 
+-- leading tokens
+
+function testcase.build_compiles_leading_tokens_apart()
+    local g = grammar({
+        name = 'ALPHA+',
+        shebang = '"#" [^\\n]*',
+        bom = '"\\xEF\\xBB\\xBF"',
+    }, {
+        '#',
+    })
+    g.leading = {
+        'shebang',
+        'bom',
+    }
+    local result, diagnostics = lexer.build(g)
+
+    -- "#" and shebang would conflict if they were in one automaton
+    assert.equal(diagnostics, {})
+    -- ids: bom 3, name 4, shebang 5, "#" 6
+    assert.equal(result.defs[3].leading, true)
+    assert.is_nil(result.defs[4].leading)
+    assert.equal(result.defs[5].leading, true)
+    assert.equal({
+        dfa.longest(result.leading, '#!/bin/lua\nx', 1),
+    }, {
+        5,
+        11,
+    })
+    assert.equal({
+        dfa.longest(result.leading, '\239\187\191x', 1),
+    }, {
+        3,
+        4,
+    })
+    assert.equal({
+        dfa.longest(result.leading, 'abc', 1),
+    }, {})
+    -- the other automaton has no leading token
+    assert.equal({
+        dfa.longest(result.dfa, '#!x', 1),
+    }, {
+        6,
+        2,
+    })
+
+    -- without leading tokens there is no automaton for them
+    result = lexer.build(grammar({
+        name = 'ALPHA+',
+    }))
+    assert.is_nil(result.leading)
+end
+
+function testcase.build_checks_leading_tokens_among_themselves()
+    local g = grammar({
+        a = '"#" [a-z]*',
+        b = '"#" [0-9]*',
+        c = '"x" | "y"',
+        e = '"z"*',
+    })
+    g.leading = {
+        'a',
+        'b',
+        'e',
+    }
+    local result, diagnostics = lexer.build(g)
+
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        {
+            severity = 'error',
+            code = 'empty_match',
+            segments = {
+                'tokens',
+                'e',
+            },
+            message = 'tokens.e matches the empty string',
+        },
+        {
+            severity = 'error',
+            code = 'token_conflict',
+            segments = {
+                'tokens',
+                'b',
+            },
+            message = 'tokens.b can match the same string as tokens.a,' ..
+                ' e.g. "#"',
+        },
+    })
+
+    -- a leading token may match what an ordinary token or a literal does
+    g = grammar({
+        name = 'ALPHA+',
+        word = 'ALPHA+',
+    }, {
+        'abc',
+    })
+    g.leading = {
+        'word',
+    }
+    result, diagnostics = lexer.build(g)
+    assert.is_table(result)
+    assert.equal(diagnostics, {})
+end
+
+function testcase.build_reports_leading_automaton_too_large()
+    -- the DFA of the leading tokens; the other automaton is small
+    local g = grammar({
+        x = '"x"',
+        t = '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 4),
+    })
+    g.leading = {
+        't',
+    }
+    local result, diagnostics = lexer.build(g, {
+        dfa_states = 8,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 8 states'),
+    })
+
+    -- the NFA of the leading tokens
+    g.tokens.t = '"abcdefgh"'
+    result, diagnostics = lexer.build(g, {
+        nfa_states = 5,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the automaton would have more than 5 states'),
+    })
+end
+
 -- delimited tokens
 
 local function lua_long(prefix)

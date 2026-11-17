@@ -279,7 +279,8 @@ local function delimited_token(lexer, index, source, pos, open_stop, len)
 end
 
 --- tokenize returns the kind of the token of source starting at pos and the
---- position after it, or nil at the end of input. A third value
+--- position after it, or nil at the end of input. At pos 1, a leading token
+--- wins over every other token. A third value
 --- 'unterminated' marks a delimited token without close, which runs to the
 --- end of input; 'nested', with the position of the nested open as a fourth
 --- value, marks a delimited token whose nest is 'error' containing an open
@@ -310,6 +311,14 @@ local function tokenize(compiled, source, pos, mode)
         return nil
     end
     local lexer = compiled.lexer
+    -- leading tokens are tried at the start of input only, before the rest
+    local leading = pos == 1 and lexer.leading
+    if leading then
+        local kind, stop = longest(leading, source, pos, len)
+        if kind then
+            return kind, stop
+        end
+    end
     local index, stop = longest(lexer.open, source, pos, len)
     if index then
         return delimited_token(lexer, index, source, pos, stop, len)

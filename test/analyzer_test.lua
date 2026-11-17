@@ -1033,3 +1033,66 @@ function testcase.parse_reports_forbidden_nested_opens()
         message = 'nested delimiter in long',
     })
 end
+
+function testcase.parse_skips_a_leading_token()
+    local compiled = compiled_of({
+        tokens = {
+            name = '[a-z]+',
+            space = '[ \\n]+',
+            shebang = '"#" [^\\n]*',
+        },
+        symbols = {
+            '#',
+        },
+        leading = {
+            'shebang',
+        },
+        skip = {
+            'space',
+            'shebang',
+        },
+        rules = {
+            chunk = '("#"? name)*',
+        },
+    })
+
+    -- the shebang line is a skipped token before the first rule
+    assert.equal(rows(parse_ok(compiled, '#!x\n#a')), {
+        {
+            'TOKEN',
+            'shebang',
+            1,
+            4,
+        },
+        {
+            'TOKEN',
+            'space',
+            4,
+            5,
+        },
+        {
+            'ENTER',
+            'chunk',
+            5,
+            6,
+        },
+        {
+            'TOKEN',
+            '#',
+            5,
+            6,
+        },
+        {
+            'TOKEN',
+            'name',
+            6,
+            7,
+        },
+        {
+            'EXIT',
+            'chunk',
+            7,
+            3,
+        },
+    })
+end

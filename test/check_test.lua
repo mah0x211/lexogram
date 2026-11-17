@@ -2127,3 +2127,80 @@ function testcase.check_reports_prefixed_table_references()
                 ' token table with open and close'),
     })
 end
+
+--- a complete grammar with the leading list leading
+local function leading_grammar(leading)
+    return {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+            shebang = '"#" [^\\n]*',
+            _hash = '"#"',
+            block = {
+                open = '"/*"',
+                close = '"*/"',
+            },
+        },
+        symbols = {
+            '#',
+        },
+        skip = {
+            'shebang',
+            'block',
+        },
+        leading = leading,
+        rules = {
+            chunk = '("#" name)*',
+            other = 'chunk',
+        },
+    }
+end
+
+function testcase.check_accepts_leading_tokens()
+    local diagnostics = check.check(leading_grammar({
+        'shebang',
+    }))
+    for i = #diagnostics, 1, -1 do
+        if diagnostics[i].code == 'unreachable_rule' then
+            table.remove(diagnostics, i)
+        end
+    end
+    assert.equal(diagnostics, {
+        warn('unused_fragment', 'tokens._hash',
+             'tokens._hash is not used by any token pattern'),
+    })
+end
+
+function testcase.check_reports_leading_problems()
+    assert.equal(check.check(leading_grammar('shebang')), {
+        err('invalid_type', 'leading', 'leading must be table, got string'),
+    })
+    assert.equal(check.check(leading_grammar({
+        'shebang',
+        '',
+        'shebang',
+        x = 'name',
+    })), {
+        err('empty_item', 'leading[2]', 'leading[2] must not be empty'),
+        err('duplicate_item', 'leading[3]',
+            'leading[3] duplicates the item at index 1'),
+        err('unknown_field', 'leading.x', 'unknown field leading.x'),
+    })
+    assert.equal(check.check(leading_grammar({
+        'none',
+        '_hash',
+        'other',
+        'block',
+    })), {
+        err('undefined_reference', 'leading[1]',
+            'leading[1] refers to undefined token "none"'),
+        err('invalid_reference', 'leading[2]', 'leading[2] refers to' ..
+                ' "_hash", which is a fragment, not a token'),
+        err('invalid_reference', 'leading[3]',
+            'leading[3] refers to "other", which is a rule, not a token'),
+        err('invalid_reference', 'leading[4]', 'leading[4] refers to' ..
+                ' "block", which is a delimited token table, not a pattern' ..
+                ' token (reserved for a future version)'),
+    })
+end

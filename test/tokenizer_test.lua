@@ -702,3 +702,72 @@ function testcase.tokenize_nests_prefixed_tokens_by_the_named_table()
         'long_comment:--[=[ a!',
     })
 end
+
+-- a shebang line as a leading token, and "#" as the length operator
+local LEADING = compiled_of({
+    tokens = {
+        name = '[a-z]+',
+        space = '[ \\n]+',
+        shebang = '"#" [^\\n]*',
+        long = {
+            open = '"#["',
+            close = '"]"',
+        },
+    },
+    symbols = {
+        '#',
+    },
+    leading = {
+        'shebang',
+    },
+    skip = {
+        'shebang',
+    },
+    rules = {
+        chunk = '("#" name | long | name)*',
+    },
+})
+
+function testcase.tokenize_tries_leading_tokens_at_the_start_only()
+    assert.equal(lex(LEADING, '#!/bin/lua\n#t #x'), {
+        'shebang:#!/bin/lua',
+        'space:\n',
+        '#:#',
+        'name:t',
+        'space: ',
+        '#:#',
+        'name:x',
+    })
+    -- at the start, a leading token wins over a literal of the same length
+    -- and over the open of a delimited token
+    assert.equal(lex(LEADING, '#'), {
+        'shebang:#',
+    })
+    assert.equal(lex(LEADING, '#[a] #[b]'), {
+        'shebang:#[a] #[b]',
+    })
+    -- the start of input only, not the start of a later call
+    assert.equal({
+        tokenizer.tokenize(LEADING, 'a #[b]', 3),
+    }, {
+        LEADING.names.long,
+        7,
+    })
+    -- without a match at the start, tokenizing goes on as usual
+    assert.equal(lex(LEADING, 'a #b'), {
+        'name:a',
+        'space: ',
+        '#:#',
+        'name:b',
+    })
+end
+
+function testcase.compile_keeps_the_leading_automaton_apart()
+    assert.equal(LEADING.lexer.leading.accept[1], 0)
+    assert.equal(LEADING.kinds[LEADING.names.shebang], {
+        name = 'shebang',
+        category = 'token',
+        skip = true,
+    })
+    assert.is_nil(NESTED.lexer.leading)
+end

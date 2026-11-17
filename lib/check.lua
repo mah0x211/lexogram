@@ -72,9 +72,10 @@ local ROOT_ORDER = {
     symbols = 4,
     keywords = 5,
     skip = 6,
-    rules = 7,
-    greedy = 8,
-    recover = 9,
+    leading = 7,
+    rules = 8,
+    greedy = 9,
+    recover = 10,
 }
 -- Required fields of a delimited token table.
 local DELIMITERS = {
@@ -657,6 +658,11 @@ local FIELDS = {
         check = check_name_list,
     },
     {
+        name = 'leading',
+        type = 'table',
+        check = check_name_list,
+    },
+    {
         name = 'rules',
         type = 'table',
         check = check_rules,
@@ -919,11 +925,34 @@ local function check_match_references(ctx, tokens)
     end
 end
 
+--- check_leading_references reports items of leading that name delimited
+--- token tables: only pattern tokens can be leading (delimited token tables
+--- are reserved for a future version).
+--- @param ctx table
+--- @param tokens table
+local function check_leading_references(ctx, tokens)
+    local list = table_field(ctx.grammar, 'leading')
+    if not list then
+        return
+    end
+    local segments = child(ROOT, 'leading')
+    for i = 1, array_length(list) do
+        local name = rawget(list, i)
+        if type(name) == 'string' and type(rawget(tokens, name)) == 'table' then
+            local segs = child(segments, i)
+            add_error(ctx, 'invalid_reference', segs,
+                      label(segs) .. ' refers to ' .. quote(name) ..
+                          ', which is a delimited token table, not a pattern' ..
+                          ' token (reserved for a future version)')
+        end
+    end
+end
+
 --- check_names checks definition names, the shared namespace of tokens and
---- rules, capture names and the plain references in start, skip, greedy
---- and recover. Malformed fields, keys and items are skipped silently; the
---- structure pass reports them. References are not checked unless both
---- tokens and rules are tables.
+--- rules, capture names and the plain references in start, skip, leading,
+--- greedy and recover. Malformed fields, keys and items are skipped
+--- silently; the structure pass reports them. References are not checked
+--- unless both tokens and rules are tables.
 --- @param ctx table
 local function check_names(ctx)
     local grammar = ctx.grammar
@@ -950,6 +979,8 @@ local function check_names(ctx)
         check_reference(ctx, child(ROOT, 'start'), start, 'rule')
     end
     check_reference_list(ctx, 'skip', 'token')
+    check_reference_list(ctx, 'leading', 'token')
+    check_leading_references(ctx, tokens)
     check_reference_list(ctx, 'greedy', 'rule')
     check_reference_list(ctx, 'recover', 'rule')
 end
