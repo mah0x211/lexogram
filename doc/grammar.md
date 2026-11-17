@@ -1,0 +1,357 @@
+# Grammar files
+
+A grammar describes the tokens and the syntax of a language. lexogram compiles it into tables that split a source into tokens and parse it into an event array. This document is the reference of the grammar format; `doc/grammars/` describes the built-in grammars.
+
+```lua
+local lexogram = require('lexogram')
+
+local grammar, err = lexogram.load('my.lua')            -- a grammar file
+local grammar, err = lexogram.load('lexogram:lua51')    -- a built-in grammar
+local diagnostics = lexogram.check(grammar)              -- errors and warnings
+local compiled, diagnostics = lexogram.compile(grammar)  -- nil on errors
+local result, err = lexogram.parse(compiled, source)
+```
+
+## Contents
+
+- [The form of a grammar](#the-form-of-a-grammar)
+- [Top-level fields](#top-level-fields)
+- [Metadata](#metadata): `lexogram`, `name`, `version`
+- [start](#start)
+- [tokens](#tokens)
+- [symbols and keywords](#symbols-and-keywords)
+- [skip](#skip)
+- [leading](#leading)
+- [rules](#rules)
+- [greedy](#greedy)
+- [recover](#recover)
+- [extends](#extends)
+- [Patterns](#patterns)
+- [How tokens are chosen](#how-tokens-are-chosen)
+- [How rules are applied](#how-rules-are-applied)
+- [Diagnostics](#diagnostics)
+
+## The form of a grammar
+
+A grammar is a Lua table. It is written in one of two forms.
+
+**A grammar file** is a Lua chunk that returns the table:
+
+```lua
+return {
+    lexogram = '2026.11.15.1',
+    name = 'calc',
+    version = '1.0.0',
+    start = 'expr',
+    tokens = {
+        number = [[ DIGIT+ ("." DIGIT+)? ]],
+        space = [[ [ \t\r\n]+ ]],
+    },
+    symbols = { '+', '-', '*', '/', '(', ')' },
+    skip = { 'space' },
+    rules = {
+        expr = [[ term (binop term)* ]],
+        term = [[ number | "(" expr ")" ]],
+        binop = [[ "+" | "-" | "*" | "/" ]],
+    },
+}
+```
+
+`lexogram.load(pathname)` runs it in an isolated environment that holds only `import`, `pairs` and `ipairs`; reading or assigning any other global variable is an error. `import(name)` returns a copy of another grammar (see [extends](#extends) for the names), to share parts between grammars. The isolation keeps grammar files declarative; it is not a security sandbox.
+
+**A grammar module** is a Lua module that returns the result of `lexogram.grammar`. The built-in grammars are such modules (`lexogram.grammars.<name>`, read as `"lexogram:<name>"`):
+
+```lua
+return assert(require('lexogram.grammar')({
+    lexogram = '2026.11.15.1',
+    name = 'calc',
+    ...
+}))
+```
+
+`require('lexogram.grammar')(def)` merges `def` into the grammar it extends, if any, and runs every check of `lexogram.check`. Without errors it returns a function that returns a new copy of the checked grammar on each call, so that no caller can change the definition; with errors it returns `nil`, a message with one line per error, and the diagnostics. A module has no directory, so its `extends` can name built-in grammars only, and it cannot use `import`.
+
+## Top-level fields
+
+| Field | Required | Value | Meaning |
+|---|---|---|---|
+| `lexogram` | yes | string | The revision of this specification that the grammar follows |
+| `name` | yes | string | The name of the grammar |
+| `version` | yes | string | The version of the grammar itself |
+| `start` | yes | rule name | The rule that must cover the whole input |
+| `tokens` | yes | table | Name → pattern, delimited token table or prefixed table |
+| `symbols` | | array of literals | Punctuation |
+| `keywords` | | array of literals | Reserved words |
+| `skip` | | array of token names | Tokens skipped between the elements of the rules |
+| `leading` | | array of pattern token names | Tokens tried at the start of the input only |
+| `rules` | yes | table | Name → pattern |
+| `greedy` | | array of rule names | Rules whose repetitions are greedy by intent |
+| `recover` | | array of rule names | Rules to recover in after a syntax error (not implemented yet) |
+| `extends` | | grammar name | The grammar this one is a difference of; resolved by `lexogram.load` |
+
+An unknown field is an error, so that a field added in a later revision cannot collide with an existing grammar.
+
+Names of tokens and rules match `[A-Za-z_][A-Za-z0-9_]*`, and tokens and rules share one namespace (a name defined in both is an error). Names in all upper case are reserved for the built-in classes. A name that starts with `_` is a helper: in `tokens` a fragment that other patterns refer to, which is not a token by itself; in `rules` a rule that produces no events. The order of the items of an array does not matter.
+
+## Metadata
+
+The fields `lexogram`, `name` and `version` tell which grammar a table is.
+
+- **`lexogram`**: the revision of this specification, `yyyy.mm.dd.n`. A later lexogram reads a grammar with the meaning of the revision it states; a revision newer than the running lexogram, or older than the first one, is an error. The only revision so far is `2026.11.15.1`.
+- **`name`**: matches `^[A-Za-z0-9_-]+$`. A built-in grammar is named after its module (`lexogram:lua51` is named `lua51`). The compiled object carries it as `compiled.name`.
+- **`version`**: the version of the grammar itself, `MAJOR.MINOR.PATCH`. Rule names and token names are a contract with consumers: a change that breaks it (a renamed or removed name) raises MAJOR, a compatible addition MINOR, any other fix PATCH. The compiled object carries it as `compiled.version`.
+
+## start
+
+The rule that the analysis starts with. It must name a rule, and the input must end after it.
+
+## tokens
+
+The tokens of the language, as a table from names to definitions. A definition is one of three forms: a pattern string, a delimited token table, or a prefixed table. A name that starts with `_` is a fragment: a pattern that other token patterns refer to, which is not a token by itself.
+
+### Pattern tokens
+
+A pattern string (see [Patterns](#patterns)) that refers to built-in classes and fragments only:
+
+```lua
+tokens = {
+    name = [[ (ALPHA | "_") (ALPHA | DIGIT | "_")* ]],
+    number = [[ _digits ("." _digits)? ]],
+    _digits = [[ DIGIT+ ]],
+}
+```
+
+A pattern token that matches the empty string is an error, and so is a pair of pattern tokens that can match the same whole string (see [How tokens are chosen](#how-tokens-are-chosen)).
+
+### Delimited token tables
+
+A token whose end is given by its start, which a pattern cannot express: a long bracket whose close repeats the level of its open, a heredoc whose close repeats its tag, a nested comment.
+
+```lua
+tokens = {
+    long_string = {
+        open = [[ "[" level "[" ]],
+        close = [[ "]" level "]" ]],
+        level = [[ "="* ]],
+    },
+}
+```
+
+| Key | Value |
+|---|---|
+| `open` | The pattern of the start. It may refer to one capture, once, as an item of its top-level sequence |
+| `close` | The end: a sequence of literals and the capture |
+| `nest` | `'count'` or `'error'` (optional, below) |
+| any other key | A capture definition: a pattern. The bytes it matched in `open` are matched again where `close` refers to it |
+
+- The items of `open` before the capture must have a fixed length, and a byte that can continue the capture must not be able to start the rest of `open`; so the captured bytes are exact.
+- The body runs to the first occurrence of the close after the open. Without one, the token runs to the end of the input and is an error (`unterminated`).
+- **`nest`** declares what an occurrence of the same open (with the same captured bytes) inside the body means. `'count'`: it opens a nested level that needs its own close (block comments of Rust, Swift, OCaml or Haskell). `'error'`: it is an error, and the token still ends at its first close (a level 0 long string of Lua 5.1). Without `nest` it is ordinary text. At each position the close is tried before the open.
+- Capture names cannot start with `_`, and a delimited token table cannot be a fragment.
+
+### Prefixed tables
+
+A token that is a fixed prefix followed by one of some delimited tokens, read exactly as those tokens are read:
+
+```lua
+tokens = {
+    long_comment = {
+        prefix = [[ "--" ]],
+        match = { 'long_string', 'long_string_level' },
+    },
+}
+```
+
+| Key | Value |
+|---|---|
+| `prefix` | A pattern that does not match the empty string |
+| `match` | A non-empty array of names of delimited token tables (with `open` and `close`) |
+
+The token is the prefix and the whole token of the table that follows it. Its close, captures and nest are those of that table, and a nested open in its body is an open of that table, without the prefix: a `[[` inside `--[[ ... ]]` is an error as it is inside `[[ ... ]]`. The prefix must have a fixed length when a named table has a capture. A table that has `prefix` or `match` is a prefixed table, so its only keys are these two. String prefixes such as `u8R"x(...)x"` of C++ have the same shape.
+
+## symbols and keywords
+
+The literal tokens: arrays of the strings that rules write in quotes. Both are matched the same way; they differ only in the category of their kinds in the compiled object (`symbol` or `keyword`).
+
+```lua
+symbols = { '+', '-', '==', '(', ')' },
+keywords = { 'if', 'then', 'end', ignore_case = true },
+```
+
+- An empty item, an item twice in one array, and an item in both arrays are errors.
+- The only setting of the hash part is `ignore_case`: when true, ASCII letters match in either case.
+- A table as an item is reserved for a later revision.
+
+## skip
+
+The tokens that may appear anywhere between the elements of the rules, such as white space and comments. A rule cannot refer to them. They are still TOKEN events of the event array (their kind has `skip = true`), placed outside the ranges of the rules, so that the events cover the whole source.
+
+## leading
+
+The pattern tokens that are tried at the start of the input only, before every other token, such as a shebang line or a byte order mark:
+
+```lua
+tokens = { shebang = [[ "#" [^\n]* ]], ... },
+leading = { 'shebang' },
+skip = { 'space', 'shebang' },
+```
+
+A leading token never matches elsewhere, and it is checked for conflicts with the other leading tokens only. Listing a token in `leading` does not use it: list it in `skip` or refer to it from a rule. Several structures at the start (a byte order mark and then a shebang line) are written as one token with alternatives. Delimited token tables are reserved for a later revision.
+
+## rules
+
+The syntax, as a table from names to patterns (see [Patterns](#patterns)). A rule pattern refers to literals, tokens (not fragments) and rules; it cannot use character classes or built-in classes. A literal must be declared in `symbols` or `keywords`.
+
+- Each application of a rule whose name does not start with `_` produces an ENTER and an EXIT event around its range. These rule names are a contract with consumers.
+- A rule whose name starts with `_` produces no events; its contents belong to the enclosing rule.
+- Which alternative of a choice was taken leaves no trace in the events, so a structure that consumers must tell apart is a rule of its own.
+- Rules may be recursive, but a rule that reaches itself without consuming a token (left recursion) is an error.
+- Expressions are written flat, without precedence: `expr = [[ unop* operand (binop unop* operand)* ]]`; a consumer applies the precedence of its language.
+
+## greedy
+
+The rules where a repetition (`?`, `*`, `+`) cannot tell from two tokens of lookahead whether to take one more element or to go on, and where the greedy choice (take the element) is the intended one. Declaring them confirms that intent: a rule with such a spot that is not in `greedy` is warned about (`undeclared_greedy`), and a rule in `greedy` without one too (`unneeded_greedy`). See [How rules are applied](#how-rules-are-applied).
+
+## recover
+
+The rules to recover in after a syntax error: the error would be replaced by an `ERROR` span covering the rule, and the analysis would go on. **Error recovery is not implemented yet**: the field is checked, but the first syntax error stops the analysis.
+
+## extends
+
+A grammar may be the difference from another grammar. `extends` names the base, and the other fields are operations on it, marked at the start of their keys:
+
+```lua
+return {
+    extends = 'lexogram:lua51',
+    name = 'lua51_shebang',
+    version = '1.0.0',
+    ['++tokens'] = { shebang = [[ "#" [^\n]* ]] },
+    ['+leading'] = { 'shebang' },
+    ['+skip'] = { 'shebang' },
+}
+```
+
+`lexogram.load` merges the difference into a copy of the base, so checking and compiling see an ordinary grammar; `lexogram.check` and `lexogram.compile` report `extends` and marked keys as unknown fields.
+
+**Names of grammars** (also the argument of `import`):
+
+| Name | Grammar |
+|---|---|
+| `'base'`, `'dir/base'` | The file `base.lua` or `dir/base.lua` below the directory of the file that writes the name. Each part matches `^[A-Za-z0-9_-]+$`, separated by `/`: a name cannot go up, be absolute or hold a drive |
+| `'lexogram:lua51'` | The built-in grammar of the module `lexogram.grammars.lua51` |
+
+The base may extend another grammar in turn; a cycle is an error.
+
+**Marks**, on a key of the table that the operation changes, telling what to do directly under it:
+
+| Key | Value | Operation | Condition |
+|---|---|---|---|
+| `+X` | array of items | Append the items to the array `X` | an item must not be in it yet |
+| `-X` | array of items | Remove the items from the array `X` | each item must be in it |
+| `++X` | table of fields | Add the fields to the table `X` | a field must not exist yet |
+| `--X` | array of names | Remove the fields from the table `X` | each field must exist |
+| `=X` | value | Replace the value of `X` | |
+| `X` | table | Enter the table `X` and apply the same marks inside it (the number of its fields does not change) | the value must be a table |
+
+Separate examples of each mark:
+
+```lua
+['+keywords'] = { 'goto' },                    -- append a keyword
+['-symbols'] = { '::' },                       -- remove a symbol
+['++rules'] = { gotostat = [[ "goto" name ]] }, -- add a rule
+['--tokens'] = { 'shebang' },                  -- remove a token
+rules = { ['=_stat'] = [[ ... | gotostat ]] },  -- replace a rule
+tokens = { ['--long_string'] = { 'nest' } },    -- remove a setting of a token
+```
+
+- The target `X` must exist in the base. The top-level table fields (`tokens`, `rules`, `symbols`, `keywords`, `skip`, `leading`, `greedy`, `recover`) exist as empty tables when the base has none.
+- In one table, removals (`-`, `--`) are applied first, then replacements and entered tables (`=`, unmarked), then additions (`+`, `++`). `=X` and `X` together are an error.
+- `extends`, `lexogram`, `name` and `version` are written without a mark. `lexogram` is inherited when it is not written; `name` and `version` are not inherited, so that a derived grammar never keeps the name of its base. `start` is replaced with `['=start']`.
+- An error of the merge is returned by `lexogram.load` as `nil, "<file>: <path>: <reason>"`.
+
+`lexogram.merge(name)` returns the Lua source of the merged grammar, which extends no grammar and loads back into an equal table, in the same form on every runtime.
+
+## Patterns
+
+`tokens` and `rules` share one notation:
+
+```ebnf
+pattern  = choice
+choice   = sequence ("|" sequence)* | sequence ("/" sequence)*
+sequence = repeat+
+repeat   = primary ("?" | "*" | "+")?
+primary  = literal | class | name | "(" choice ")"
+```
+
+| Notation | Meaning | In `tokens` | In `rules` |
+|---|---|---|---|
+| `"abc"` | Literal | yes | yes (declared ones) |
+| `[a-z_]`, `[^"\\]` | Character class, negated class | yes | no |
+| name | Reference | built-in classes and fragments | tokens and rules |
+| `A B` | Sequence | yes | yes |
+| `A \| B` | Choice, independent of order | yes | yes |
+| `A / B` | Ordered choice (tried in order) | no | yes |
+| `A?`, `A*`, `A+` | Optional, zero or more, one or more | yes | yes |
+| `(A)` | Grouping | yes | yes |
+
+- Postfix operators bind tighter than sequences, and sequences tighter than choices. `|` and `/` cannot be mixed in one choice; group one of them with parentheses.
+- White space outside quotes and brackets is ignored. Patterns are written in Lua long brackets (`[[ ... ]]`), where the escapes of Lua do not apply; a pattern that contains `]]` is written in `[=[ ... ]=]`.
+- Escapes in literals and classes: `\\`, `\"`, `\n`, `\r`, `\t`, `\xHH` (one byte) and `\u{H...}` (a code point); in classes also `\]`, `\-` and `\^`. Other punctuation is reserved for later operators and is an error.
+- Parentheses nest at most 100 deep.
+
+**Bytes and code points**: patterns match bytes. A literal matches the UTF-8 bytes of its text. A class of ASCII characters and `\xHH` is a set of bytes, and its negation any other byte. A class with a non-ASCII character or `\u{...}` is a set of code points, matched as their UTF-8 bytes, and its negation any other valid code point. `\xHH` above `7F` cannot be mixed with code points in one class.
+
+**Built-in classes**:
+
+| Name | Matches |
+|---|---|
+| `ALPHA` | `[A-Za-z]` |
+| `DIGIT` | `[0-9]` |
+| `HEXDIGIT` | `[0-9A-Fa-f]` |
+| `ANY` | Any one byte |
+
+## How tokens are chosen
+
+At a position of the source, the token is chosen in this order:
+
+1. At position 1 only, the longest match of the leading tokens, if any.
+2. The delimited token whose open matches; of several, the longest open.
+3. The longest match of the pattern tokens and the literals.
+4. Of a pattern token and a literal of the same length, the literal.
+5. A byte that starts no token is an `INVALID` token of one byte.
+
+Two pattern tokens (or two leading tokens) that can match the same whole string are an error, and so are two opens of delimited tokens; the diagnostic shows the shortest such string. A pattern token that never wins, because a literal or a longer token always takes its strings, is warned about (`never_adopted`).
+
+## How rules are applied
+
+The analysis is deterministic and looks at most two tokens ahead (skipped tokens are not counted).
+
+- **Choice `|`**: the alternatives must be told apart by the next two tokens; otherwise it is an error (`ambiguous_choice`). As long as they can be told apart, their order does not matter.
+- **Repetition `?`, `*`, `+`**: greedy. When the next tokens can start the element, the element is taken. Where they could also follow the repetition, the greedy choice decides the result; such a rule is declared in `greedy`.
+- **Ordered choice `/`** (rules only): the first alternative is tried; if a syntax error occurs inside it, the input and the events are rewound to its start and the next alternative is tried. Once an alternative succeeds it is kept, even if a later part fails. When the next token cannot start an alternative, it is not tried. The overlap of the alternatives is not checked: their order decides. Nested trials can cost much time; use them only where two tokens cannot decide.
+- **Syntax errors**: the analysis stops with `nil` and `{ code, pos, line, column, expected, actual, message }`.
+
+The compilation also rejects a repetition of an element that can match nothing (`nullable_repetition`), a rule that cannot derive a finite sequence of tokens (`nonterminating_rule`), and a rule that refers to a token in `skip` (`skipped_token`).
+
+## Diagnostics
+
+`lexogram.check(grammar)` returns a list of diagnostics, and `lexogram.compile` returns the same list (with `nil` on errors). It never raises, whatever value it is given.
+
+```lua
+-- for rules = { block = [[ stat ]], ... } without a token or rule stat
+{ severity = 'error', code = 'undefined_reference', path = 'rules.block',
+  pos = 2, message = 'rules.block refers to undefined token or rule "stat"' }
+```
+
+- `severity` is `'error'` or `'warning'`. Warnings are reported only when there is no error.
+- `path` is the place in the grammar: `rules.block`, `tokens.long_string.open`, `symbols[3]`, `tokens["a b"]`.
+- `pos` is the byte position in a pattern string, for diagnostics about a pattern.
+- The list is ordered by path (top-level fields in the order of the table above), then position, then code.
+
+| Kind | Codes |
+|---|---|
+| Structure | `invalid_type`, `missing_field`, `unknown_field`, `invalid_key`, `invalid_value`, `invalid_version`, `version_too_new`, `version_too_old`, `empty_item`, `duplicate_item`, `reserved_item`, `invalid_name`, `reserved_name`, `duplicate_name`, `undefined_reference`, `invalid_reference`, `undeclared_literal` |
+| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
+| Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `automaton_too_large` |
+| Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice` |
+| Warnings | `never_adopted`, `undeclared_greedy`, `unneeded_greedy`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
