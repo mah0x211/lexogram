@@ -27,9 +27,8 @@
 -- reference manual (section 9, the complete syntax, and section 3.1, the
 -- lexical conventions) and of its lexer and parser (llex.c, lparser.c).
 -- doc/grammars/lua52.md and doc/grammars/lua51.md describe what it
--- inherits; the sections below
--- follow the top-level fields of the table returned at the end of this
--- file and tell what changes.
+-- inherits; the sections below follow the top-level fields of the table
+-- returned at the end of this file and tell what changes.
 --
 -- Metadata
 --
