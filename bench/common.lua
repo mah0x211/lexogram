@@ -3,18 +3,20 @@
 --
 -- usage of a script: lua bench/<script>.lua [grammar] [files...]
 --
--- grammar defaults to bench/grammars/lua51_lexical.lua, and the input to
--- the library sources listed in LIB_FILES (there is no directory walking
+-- grammar is a grammar file or a built-in grammar ("lexogram:lua51") and
+-- defaults to bench/grammars/lua51_lexical.lua, and the input to the
+-- library sources listed in LIB_FILES (there is no directory walking
 -- library, so the list is explicit and must be updated with new modules).
--- The files are concatenated and repeated until the input has at least
--- 2 MB. The grammar is compiled once (the compile time is reported), and
+-- Each file is wrapped in do ... end, so that the input is one chunk of
+-- Lua, and the files are concatenated and repeated until the input has at
+-- least 2 MB. The grammar is compiled once (the compile time is reported), and
 -- the measured function runs over the whole input RUNS times; the best run
 -- is reported.
 --
 -- The lexogram modules are loaded from lib/ of this repository (found
 -- from the path of the script), not from an installed rock: a searcher
--- inserted before the standard ones maps lexogram to lib/lexogram.lua and
--- lexogram.a.b to lib/a/b.lua. This works the same with Lua 5.1 - 5.5 and
+-- inserted before the standard ones maps lexogram to lib/lexogram.lua,
+-- lexogram.grammars.x to grammars/x.lua and lexogram.a.b to lib/a/b.lua. This works the same with Lua 5.1 - 5.5 and
 -- LuaJIT, e.g. ~/.lenv/luajit/v2.1/bin/luajit bench/parse.lua
 -- the repository root: the parent of the directory of the running script
 local ROOT = ((arg and arg[0] or ''):match('^(.-)[^/\\]*$') or '') .. '../'
@@ -34,9 +36,12 @@ local LIB_FILES = {
     'lib/compile/syntax.lua',
     'lib/compile/utf8range.lua',
     'lib/events.lua',
+    'lib/extend.lua',
+    'lib/grammar.lua',
     'lib/lexogram.lua',
     'lib/loader.lua',
     'lib/pattern.lua',
+    'lib/source.lua',
     'lib/text.lua',
     'lib/tokenizer.lua',
     'lib/utf8.lua',
@@ -51,6 +56,9 @@ table.insert(searchers, 2, function(name)
     local path
     if name == 'lexogram' then
         path = ROOT .. 'lib/lexogram.lua'
+    elseif name:sub(1, 18) == 'lexogram.grammars.' then
+        -- the built-in grammars ("lexogram:<name>")
+        path = ROOT .. 'grammars/' .. name:sub(19) .. '.lua'
     elseif name:sub(1, 9) == 'lexogram.' then
         path = ROOT .. 'lib/' .. name:sub(10):gsub('%.', '/') .. '.lua'
     else
@@ -108,9 +116,11 @@ local function setup(args)
         fail('the grammar has errors')
     end
 
+    -- each file is a block of its own, so that the input is one chunk of
+    -- Lua (a file may end with return)
     local parts = {}
     for i, pathname in ipairs(files) do
-        parts[i] = read_file(pathname)
+        parts[i] = 'do\n' .. read_file(pathname) .. '\nend'
     end
     local unit = table.concat(parts, '\n')
     if #unit == 0 then
