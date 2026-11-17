@@ -49,19 +49,34 @@
 --                        state s and a byte of class c; 0 is the dead state
 --                        (no transition). The start state is 1.
 --     accept             accept[s] is the kind id accepted in state s, or 0
+--     leading            an automaton of the same shape over the leading
+--                        tokens (listed in leading), which the automaton
+--                        above does not have; absent without them
 --     open               an automaton of the same shape over the opens of
---                        the delimited tokens; accept holds their kind ids
---     delimited          dense array of { id, prefix, capture, close }
---                        sorted by kind id, one per delimited token:
+--                        the delimited tokens; accept holds indexes into
+--                        delimited
+--     delimited          dense array of { id, prefix, capture, close, nest,
+--                        inner } in kind id order: one per delimited token
+--                        table with open and close, and one per table named
+--                        by the match of a prefixed table (in match order):
+--                          id       the kind id of the token
 --                          prefix   fixed byte length before the capture
 --                                   (absent without a capture)
 --                          capture  automaton of the capture definition
 --                                   (same shape, absent without a capture)
 --                          close    array of parts { literal = <string> }
 --                                   or { capture = true }
+--                          nest     'count' or 'error' (absent: an open in
+--                                   the body is ordinary text)
+--                          inner    with nest, the index of the entry whose
+--                                   open is a nested open (the entry itself,
+--                                   or for a prefixed table the entry of the
+--                                   named table)
 --
--- Tokenizing: at a position, if the open automaton accepts a non-empty
--- prefix, the delimited token with the longest open wins. After its open
+-- Tokenizing: at the start of input, if the leading automaton accepts a
+-- non-empty prefix, the longest one is the token. Otherwise, at a
+-- position, if the open automaton accepts a non-empty prefix, the entry of
+-- delimited with the longest open wins. After its open
 -- matched at pos, the capture starts at pos + prefix and ends where the
 -- capture automaton, run greedily from there, has no transition. The close
 -- string is the concatenation of the close parts with the captured bytes
@@ -122,29 +137,29 @@ local function automaton(d)
     }
 end
 
---- delimited_entries returns the compiled delimited tokens sorted by id.
---- @param defs table[]
---- @param tokens table id -> { prefix, capture, close }
+--- delimited_entries returns the compiled delimited tokens in the order
+--- of the indexes accepted by the open automaton.
+--- @param entries table[] { id, token, inner }
 --- @return table[]
-local function delimited_entries(defs, tokens)
+local function delimited_entries(entries)
     local out = {}
-    for _, def in ipairs(defs) do
-        local token = tokens[def.id]
-        if token then
-            local close = {}
-            for i, part in ipairs(token.close) do
-                close[i] = {
-                    literal = part.literal,
-                    capture = part.capture,
-                }
-            end
-            out[#out + 1] = {
-                id = def.id,
-                prefix = token.prefix,
-                capture = token.capture and automaton(token.capture),
-                close = close,
+    for i, entry in ipairs(entries) do
+        local token = entry.token
+        local close = {}
+        for j, part in ipairs(token.close) do
+            close[j] = {
+                literal = part.literal,
+                capture = part.capture,
             }
         end
+        out[i] = {
+            id = entry.id,
+            prefix = token.prefix,
+            capture = token.capture and automaton(token.capture),
+            close = close,
+            nest = token.nest,
+            inner = token.nest and entry.inner,
+        }
     end
     return out
 end
@@ -195,8 +210,9 @@ local function build_object(grammar, lexer, syntax)
         names[kind.name] = kind.id
     end
     local automata = automaton(lexer.dfa)
+    automata.leading = lexer.leading and automaton(lexer.leading)
     automata.open = automaton(lexer.delimited.open)
-    automata.delimited = delimited_entries(lexer.defs, lexer.delimited.tokens)
+    automata.delimited = delimited_entries(lexer.delimited.entries)
     return {
         lexogram = resolve_version(rawget(grammar, 'lexogram')),
         kinds = kinds,

@@ -20,7 +20,8 @@
 -- THE SOFTWARE.
 --
 -- lexogram.compile.delimited: checks and compiles delimited token tables
--- ({ open, close, <capture> = pattern, ... }) for lexogram.compile.lexer.
+-- ({ open, close, <capture> = pattern, ... }) and prefixed delimited token
+-- tables ({ prefix, match }) for lexogram.compile.lexer.
 --
 -- Runtime contract of a compiled table (the tokenizer is built later):
 -- after the open automaton matched at pos, the capture (if any) starts at
@@ -30,7 +31,19 @@
 -- string is the concatenation of the close parts, with each capture part
 -- replaced by the captured bytes. The body ends at the first occurrence of
 -- the close string after the open; without one, the token runs to the end
--- of the input.
+-- of the input. With nest = 'count', an occurrence of this open with the
+-- same captured bytes inside the body opens a nested level that needs its
+-- own close; with nest = 'error', it is an error. The close is looked for
+-- before the open at each position.
+--
+-- The setting keys open, close and nest are not capture definitions;
+-- every other key is.
+--
+-- A prefixed table { prefix = pattern, match = { name, ... } } gives one
+-- entry for each delimited token table it names: its open is the prefix
+-- followed by the open of that table, and everything else (captures,
+-- close, nest) is that table's. A nested open in its body is an open of
+-- the named table (without the prefix).
 --
 -- The functions take a limits table { nfa = { max_states }, dfa =
 -- { max_states } } that is passed to nfa.build and dfa.build (tests only;
@@ -47,6 +60,14 @@ local parse = require('lexogram.pattern').parse
 local quote = require('lexogram.text').quote
 local nfa = require('lexogram.compile.nfa')
 local dfa = require('lexogram.compile.dfa')
+
+-- Setting keys of a delimited token table; every other key defines a
+-- capture.
+local SETTINGS = {
+    open = true,
+    close = true,
+    nest = true,
+}
 
 -- Prefix of the synthetic fragment names that stand for captures in the
 -- open automaton. A NUL byte never occurs in a user name.
@@ -518,7 +539,7 @@ end
 local function new_analysis(name, tbl, fragments, diagnostics)
     local captures, keys, capdefs = {}, {}, {}
     for k in next, tbl do
-        if k ~= 'open' and k ~= 'close' then
+        if not SETTINGS[k] then
             captures[k] = true
             keys[#keys + 1] = k
         end
@@ -570,6 +591,8 @@ end
 --- @param limits table { nfa, dfa }
 --- @return table? entry { name, open, synthetic, capture_ast, token }
 --- @return table? err automaton_too_large
+--- The entry also has field ('open': the field named in messages about its
+--- open) and inner (the name of the table whose open is a nested open).
 local function analyze(name, tbl, fragments, diagnostics, limits)
     local before = #diagnostics
     local a = new_analysis(name, tbl, fragments, diagnostics)
@@ -596,6 +619,8 @@ local function analyze(name, tbl, fragments, diagnostics, limits)
     end
     return {
         name = name,
+        field = 'open',
+        inner = name,
         open = inline(a, index),
         synthetic = index and SYNTHETIC_PREFIX .. name,
         capture_ast = index and a.capdefs[a.capture_name],
@@ -603,33 +628,97 @@ local function analyze(name, tbl, fragments, diagnostics, limits)
             prefix = prefix,
             capture = capture,
             close = parts,
+            nest = rawget(tbl, 'nest'),
         },
     }
 end
 
---- build_open builds the DFA of all opens of entries (ids from ids) and
---- reports opens that can match the same string.
---- @param entries table[] results of analyze
---- @param ids table name -> id
+--- is_prefixed returns true if the delimited token table tbl is a prefixed
+--- table (it has prefix or match).
+--- @param tbl table
+--- @return boolean
+local function is_prefixed(tbl)
+    return rawget(tbl, 'prefix') ~= nil or rawget(tbl, 'match') ~= nil
+end
+
+--- analyze_prefixed checks the prefixed table name and returns its entries,
+--- one for each table it names that has an entry in by_name (the tables
+--- with errors have none).
+--- @param name string
+--- @param tbl table
+--- @param by_name table name -> result of analyze
+--- @param fragments table user fragments
+--- @param diagnostics table[]
+--- @return table[] entries
+local function analyze_prefixed(name, tbl, by_name, fragments, diagnostics)
+    local label = 'tokens.' .. name .. '.prefix'
+    local segments = triple('tokens', name, 'prefix')
+    local prefix = parse(rawget(tbl, 'prefix'), 'tokens')
+    local min, max = lengths(prefix, fragments, {})
+    if min == 0 then
+        add_error(diagnostics, 'empty_match', segments, nil,
+                  label .. ' matches the empty string')
+        return {}
+    end
+    local entries = {}
+    local match = rawget(tbl, 'match')
+    local i = 1
+    local ref = rawget(match, i)
+    while ref ~= nil do
+        -- a named table with errors has no entry (they are reported)
+        local inner = by_name[ref]
+        if inner and inner.token.capture and min ~= max then
+            add_error(diagnostics, 'invalid_delimiter', segments, nil,
+                      label .. ' must have a fixed length, because tokens.' ..
+                          ref .. ' has a capture')
+        elseif inner then
+            local token = inner.token
+            entries[#entries + 1] = {
+                name = name,
+                field = 'prefix',
+                inner = ref,
+                open = {
+                    type = 'seq',
+                    pos = prefix.pos,
+                    items = pair(prefix, inner.open),
+                },
+                synthetic = inner.synthetic,
+                capture_ast = inner.capture_ast,
+                token = {
+                    prefix = token.prefix and token.prefix + min,
+                    capture = token.capture,
+                    close = token.close,
+                    nest = token.nest,
+                },
+            }
+        end
+        i = i + 1
+        ref = rawget(match, i)
+    end
+    return entries
+end
+
+--- build_open builds the DFA of all opens of entries, whose accept holds
+--- the indexes of entries, and reports opens of different tables that can
+--- match the same string.
+--- @param entries table[] results of analyze and analyze_prefixed
 --- @param fragments table user fragments
 --- @param diagnostics table[]
 --- @param limits table { nfa, dfa }
 --- @return table? d
 --- @return table? err automaton_too_large
-local function build_open(entries, ids, fragments, diagnostics, limits)
+local function build_open(entries, fragments, diagnostics, limits)
     local all = {}
     for k, v in next, fragments do
         all[k] = v
     end
-    local defs, rank, names = {}, {}, {}
+    local defs, rank = {}, {}
     for i, entry in ipairs(entries) do
-        local id = ids[entry.name]
         defs[i] = {
-            id = id,
+            id = i,
             ast = entry.open,
         }
-        rank[id] = 1
-        names[id] = entry.name
+        rank[i] = 1
         if entry.synthetic then
             all[entry.synthetic] = entry.capture_ast
         end
@@ -651,16 +740,20 @@ local function build_open(entries, ids, fragments, diagnostics, limits)
         local set = d.accept_sets[s]
         for i = 1, #set do
             for j = i + 1, #set do
-                local key = set[i] .. ',' .. set[j]
-                if not seen[key] then
+                -- the sets are sorted and the entries are in kind id order,
+                -- which is name order, so b has the later name
+                local a, b = entries[set[i]], entries[set[j]]
+                -- two entries of one prefixed table conflict only when the
+                -- tables they name do, which is reported for those
+                local key = a.name .. ',' .. b.name
+                if a.name ~= b.name and not seen[key] then
                     seen[key] = true
-                    -- ids are in name order, so set[j] is the later name
-                    local later = names[set[j]]
                     add_error(diagnostics, 'delimiter_conflict',
-                              triple('tokens', later, 'open'), nil,
-                              'tokens.' .. later .. '.open can match the' ..
-                                  ' same string as tokens.' .. names[set[i]] ..
-                                  '.open, e.g. ' .. quote(example(s)))
+                              triple('tokens', b.name, b.field), nil,
+                              'tokens.' .. b.name .. '.' .. b.field ..
+                                  ' can match the same string as tokens.' ..
+                                  a.name .. '.' .. a.field .. ', e.g. ' ..
+                                  quote(example(s)))
                 end
             end
         end
@@ -670,6 +763,9 @@ end
 
 return {
     examples = examples,
+    SETTINGS = SETTINGS,
     analyze = analyze,
+    is_prefixed = is_prefixed,
+    analyze_prefixed = analyze_prefixed,
     build_open = build_open,
 }

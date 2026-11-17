@@ -378,6 +378,142 @@ function testcase.build_reports_no_warning_with_errors()
     })
 end
 
+-- leading tokens
+
+function testcase.build_compiles_leading_tokens_apart()
+    local g = grammar({
+        name = 'ALPHA+',
+        shebang = '"#" [^\\n]*',
+        bom = '"\\xEF\\xBB\\xBF"',
+    }, {
+        '#',
+    })
+    g.leading = {
+        'shebang',
+        'bom',
+    }
+    local result, diagnostics = lexer.build(g)
+
+    -- "#" and shebang would conflict if they were in one automaton
+    assert.equal(diagnostics, {})
+    -- ids: bom 3, name 4, shebang 5, "#" 6
+    assert.equal(result.defs[3].leading, true)
+    assert.is_nil(result.defs[4].leading)
+    assert.equal(result.defs[5].leading, true)
+    assert.equal({
+        dfa.longest(result.leading, '#!/bin/lua\nx', 1),
+    }, {
+        5,
+        11,
+    })
+    assert.equal({
+        dfa.longest(result.leading, '\239\187\191x', 1),
+    }, {
+        3,
+        4,
+    })
+    assert.equal({
+        dfa.longest(result.leading, 'abc', 1),
+    }, {})
+    -- the other automaton has no leading token
+    assert.equal({
+        dfa.longest(result.dfa, '#!x', 1),
+    }, {
+        6,
+        2,
+    })
+
+    -- without leading tokens there is no automaton for them
+    result = lexer.build(grammar({
+        name = 'ALPHA+',
+    }))
+    assert.is_nil(result.leading)
+end
+
+function testcase.build_checks_leading_tokens_among_themselves()
+    local g = grammar({
+        a = '"#" [a-z]*',
+        b = '"#" [0-9]*',
+        c = '"x" | "y"',
+        e = '"z"*',
+    })
+    g.leading = {
+        'a',
+        'b',
+        'e',
+    }
+    local result, diagnostics = lexer.build(g)
+
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        {
+            severity = 'error',
+            code = 'empty_match',
+            segments = {
+                'tokens',
+                'e',
+            },
+            message = 'tokens.e matches the empty string',
+        },
+        {
+            severity = 'error',
+            code = 'token_conflict',
+            segments = {
+                'tokens',
+                'b',
+            },
+            message = 'tokens.b can match the same string as tokens.a,' ..
+                ' e.g. "#"',
+        },
+    })
+
+    -- a leading token may match what an ordinary token or a literal does
+    g = grammar({
+        name = 'ALPHA+',
+        word = 'ALPHA+',
+    }, {
+        'abc',
+    })
+    g.leading = {
+        'word',
+    }
+    result, diagnostics = lexer.build(g)
+    assert.is_table(result)
+    assert.equal(diagnostics, {})
+end
+
+function testcase.build_reports_leading_automaton_too_large()
+    -- the DFA of the leading tokens; the other automaton is small
+    local g = grammar({
+        x = '"x"',
+        t = '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 4),
+    })
+    g.leading = {
+        't',
+    }
+    local result, diagnostics = lexer.build(g, {
+        dfa_states = 8,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 8 states'),
+    })
+
+    -- the NFA of the leading tokens
+    g.tokens.t = '"abcdefgh"'
+    result, diagnostics = lexer.build(g, {
+        nfa_states = 5,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the automaton would have more than 5 states'),
+    })
+end
+
 -- delimited tokens
 
 local function lua_long(prefix)
@@ -440,26 +576,40 @@ function testcase.build_compiles_lua_long_strings_and_comments()
         },
     })
 
+    -- the open automaton accepts the indexes of the entries, which are in
+    -- kind id order
+    assert.equal(result.delimited.entries, {
+        {
+            id = 5,
+            token = tokens[5],
+            inner = 1,
+        },
+        {
+            id = 6,
+            token = tokens[6],
+            inner = 2,
+        },
+    })
     local open = result.delimited.open
     for _, case in ipairs({
         {
             '[[',
-            6,
+            2,
             3,
         },
         {
             '[==[ x',
-            6,
+            2,
             5,
         },
         {
             '--[[',
-            5,
+            1,
             5,
         },
         {
             '--[=[',
-            5,
+            1,
             6,
         },
     }) do
@@ -509,7 +659,7 @@ function testcase.build_compiles_delimited_tokens_with_captures_at_the_ends()
     assert.equal({
         dfa.longest(result.delimited.open, '<<EOF', 1),
     }, {
-        3,
+        1,
         6,
     })
 end
@@ -814,6 +964,221 @@ function testcase.build_reports_delimiter_conflicts()
             },
             message = 'tokens.short.open can match the same string as' ..
                 ' tokens.long.open, e.g. "[["',
+        },
+    })
+end
+
+-- the delimited token tables of Lua long brackets of level 0 and of the
+-- levels with "=", and the long comment as a prefixed table naming both
+local function lua_brackets(prefix)
+    return {
+        long_string = {
+            open = '"[["',
+            close = '"]]"',
+            nest = 'error',
+        },
+        long_level = {
+            open = '"[" level "["',
+            close = '"]" level "]"',
+            level = '"="+',
+        },
+        long_comment = {
+            prefix = prefix,
+            match = {
+                'long_string',
+                'long_level',
+            },
+        },
+    }
+end
+
+function testcase.build_compiles_prefixed_delimited_tokens()
+    local result, diagnostics = lexer.build(grammar(lua_brackets('"--"')))
+
+    assert.equal(diagnostics, {})
+    -- kind ids by name: long_comment 3, long_level 4, long_string 5; the
+    -- entries of long_comment follow its match
+    local entries = result.delimited.entries
+    local summary = {}
+    for i, entry in ipairs(entries) do
+        summary[i] = {
+            entry.id,
+            entry.inner,
+            entry.token.prefix,
+            entry.token.nest,
+        }
+    end
+    assert.equal(summary, {
+        {
+            3,
+            4,
+            nil,
+            'error',
+        },
+        {
+            3,
+            3,
+            3,
+        },
+        {
+            4,
+            3,
+            1,
+        },
+        {
+            5,
+            4,
+            nil,
+            'error',
+        },
+    })
+    -- the close of a named table is shared by the entry of the prefix
+    assert.equal(entries[2].token.close, entries[3].token.close)
+    assert.equal(extract_capture(entries[2].token, '--[==[', 1), '==')
+    -- only the tables with open and close are in tokens
+    assert.equal(result.delimited.tokens[3], nil)
+
+    local open = result.delimited.open
+    for _, case in ipairs({
+        {
+            '--[[',
+            1,
+            5,
+        },
+        {
+            '--[=[',
+            2,
+            6,
+        },
+        {
+            '[=[',
+            3,
+            4,
+        },
+        {
+            '[[',
+            4,
+            3,
+        },
+    }) do
+        assert.equal({
+            dfa.longest(open, case[1], 1),
+        }, {
+            case[2],
+            case[3],
+        })
+    end
+    for _, s in ipairs({
+        '--',
+        '--[',
+        '---[[',
+    }) do
+        assert.equal({
+            dfa.longest(open, s, 1),
+        }, {})
+    end
+end
+
+function testcase.build_allows_a_variable_prefix_without_captures()
+    local tokens = lua_brackets('"-"+')
+    tokens.long_comment.match[2] = nil
+    local result, diagnostics = lexer.build(grammar(tokens))
+
+    assert.equal(diagnostics, {})
+    assert.equal({
+        dfa.longest(result.delimited.open, '---[[', 1),
+    }, {
+        1,
+        6,
+    })
+end
+
+function testcase.build_reports_prefixed_table_problems()
+    -- a prefix with a variable length before a capture
+    local result, diagnostics = lexer.build(grammar(lua_brackets('"-"+')))
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        {
+            severity = 'error',
+            code = 'invalid_delimiter',
+            segments = {
+                'tokens',
+                'long_comment',
+                'prefix',
+            },
+            message = 'tokens.long_comment.prefix must have a fixed length,' ..
+                ' because tokens.long_level has a capture',
+        },
+    })
+
+    -- a prefix that matches the empty string
+    result, diagnostics = lexer.build(grammar(lua_brackets('"-"*')))
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        {
+            severity = 'error',
+            code = 'empty_match',
+            segments = {
+                'tokens',
+                'long_comment',
+                'prefix',
+            },
+            message = 'tokens.long_comment.prefix matches the empty string',
+        },
+    })
+
+    -- a named table with errors gives no entry and no other error
+    local tokens = lua_brackets('"--"')
+    tokens.long_level.close = '"]" "="* "]"'
+    result, diagnostics = lexer.build(grammar(tokens))
+    assert.is_nil(result)
+    assert.equal(#diagnostics, 1)
+    assert.equal(diagnostics[1].segments, {
+        'tokens',
+        'long_level',
+        'close',
+    })
+end
+
+function testcase.build_reports_prefixed_table_conflicts()
+    local tokens = lua_brackets('"--"')
+    tokens.other = {
+        open = '"--[["',
+        close = '"]]"',
+    }
+    -- a second table with the same open as long_string: its conflict is
+    -- reported once, not again for the two entries of long_comment (the
+    -- order is the order of the automaton states)
+    tokens.square = {
+        open = '"[["',
+        close = '"]]"',
+    }
+    tokens.long_comment.match[3] = 'square'
+    local result, diagnostics = lexer.build(grammar(tokens))
+
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        {
+            severity = 'error',
+            code = 'delimiter_conflict',
+            segments = {
+                'tokens',
+                'square',
+                'open',
+            },
+            message = 'tokens.square.open can match the same string as' ..
+                ' tokens.long_string.open, e.g. "[["',
+        },
+        {
+            severity = 'error',
+            code = 'delimiter_conflict',
+            segments = {
+                'tokens',
+                'other',
+                'open',
+            },
+            message = 'tokens.other.open can match the same string as' ..
+                ' tokens.long_comment.prefix, e.g. "--[["',
         },
     })
 end

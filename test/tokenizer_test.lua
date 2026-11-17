@@ -65,19 +65,19 @@ local LUA = compiled_of({
 })
 
 -- tokenize source completely; each token is "name:text", with "!" appended
--- to an unterminated token
+-- to an unterminated token and "?" to a token with a forbidden nested open
 local function lex(compiled, source)
     local out = {}
     local pos = 1
     while true do
-        local kind, stop, unterminated =
-            tokenizer.tokenize(compiled, source, pos)
+        local kind, stop, problem = tokenizer.tokenize(compiled, source, pos)
         if not kind then
             return out
         end
         local name = compiled.kinds[kind].name
         out[#out + 1] = name .. ':' .. source:sub(pos, stop - 1) ..
-                            (unterminated and '!' or '')
+                            (problem == 'unterminated' and '!' or '') ..
+                            (problem == 'nested' and '?' or '')
         pos = stop
     end
 end
@@ -307,7 +307,7 @@ function testcase.tokenize_marks_unterminated_delimited_tokens()
     }, {
         LUA.names.long_string,
         #source + 1,
-        true,
+        'unterminated',
     })
     assert.equal(lex(LUA, '--[[ open'), {
         'long_comment:--[[ open!',
@@ -454,4 +454,320 @@ function testcase.tokenize_covers_every_byte()
         end
         check_cover(LUA, table.concat(parts))
     end
+end
+
+-- nest
+
+local NESTED = compiled_of({
+    tokens = {
+        name = '[a-z]+',
+        space = '" "+',
+        -- nested comments as in Rust or OCaml
+        block = {
+            open = '"/*"',
+            close = '"*/"',
+            nest = 'count',
+        },
+        -- a level 0 long bracket that forbids nesting, as in Lua 5.1
+        long0 = {
+            open = '"[["',
+            close = '"]]"',
+            nest = 'error',
+        },
+        -- long brackets with levels that count nesting of the same level
+        long = {
+            open = '"[" level "["',
+            close = '"]" level "]"',
+            level = '"="+',
+            nest = 'count',
+        },
+        -- the open is also the close: the close is tried first
+        bar = {
+            open = '"|"',
+            close = '"|"',
+            nest = 'count',
+        },
+    },
+    rules = {
+        chunk = '(name | block | long0 | long | bar)*',
+    },
+})
+
+function testcase.tokenize_counts_nested_opens()
+    assert.equal(lex(NESTED, '/* a /* b */ c */ x'), {
+        'block:/* a /* b */ c */',
+        'space: ',
+        'name:x',
+    })
+    assert.equal(lex(NESTED, '/* /* */'), {
+        'block:/* /* */!',
+    })
+    -- only an open with the same captured bytes nests
+    assert.equal(lex(NESTED, '[=[ [==[ ]=] x'), {
+        'long:[=[ [==[ ]=]',
+        'space: ',
+        'name:x',
+    })
+    assert.equal(lex(NESTED, '[=[ [=[ ]=] ]=] x'), {
+        'long:[=[ [=[ ]=] ]=]',
+        'space: ',
+        'name:x',
+    })
+    assert.equal(lex(NESTED, '|a|b|'), {
+        'bar:|a|',
+        'name:b',
+        'bar:|!',
+    })
+end
+
+function testcase.tokenize_nests_only_opens_with_the_same_capture()
+    local compiled = compiled_of({
+        tokens = {
+            name = '[a-z]+',
+            space = '" "+',
+            heredoc = {
+                open = '"<<" tag ":"',
+                close = 'tag ">>"',
+                tag = '[A-Z]+',
+                nest = 'count',
+            },
+        },
+        rules = {
+            chunk = '(name | heredoc)*',
+        },
+    })
+
+    -- <<ABD: has a capture of the same length but other bytes: not nested
+    assert.equal(lex(compiled, '<<ABC: <<ABD: ABC>> x'), {
+        'heredoc:<<ABC: <<ABD: ABC>>',
+        'space: ',
+        'name:x',
+    })
+    assert.equal(lex(compiled, '<<ABC: <<ABC: ABC>> ABC>> x'), {
+        'heredoc:<<ABC: <<ABC: ABC>> ABC>>',
+        'space: ',
+        'name:x',
+    })
+end
+
+function testcase.tokenize_reports_forbidden_nested_opens()
+    local source = '[[ a [[ b ]] c'
+    -- the token still ends at its first close; the fourth value is the
+    -- position of the nested open
+    assert.equal({
+        tokenizer.tokenize(NESTED, source, 1),
+    }, {
+        NESTED.names.long0,
+        13,
+        'nested',
+        6,
+    })
+    assert.equal(lex(NESTED, source), {
+        'long0:[[ a [[ b ]]?',
+        'space: ',
+        'name:c',
+    })
+    assert.equal(lex(NESTED, '[[ a ]]'), {
+        'long0:[[ a ]]',
+    })
+    -- a forbidden open in an unterminated token is reported as nested
+    assert.equal({
+        tokenizer.tokenize(NESTED, '[[ [[', 1),
+    }, {
+        NESTED.names.long0,
+        6,
+        'nested',
+        4,
+    })
+end
+
+function testcase.compile_keeps_the_nest_setting()
+    local nests = {}
+    for _, entry in ipairs(NESTED.lexer.delimited) do
+        nests[NESTED.kinds[entry.id].name] = entry.nest or 'none'
+    end
+
+    assert.equal(nests, {
+        block = 'count',
+        long0 = 'error',
+        long = 'count',
+        bar = 'count',
+    })
+    local plain = compiled_of({
+        tokens = {
+            name = '[a-z]+',
+            long = {
+                open = '"[["',
+                close = '"]]"',
+            },
+        },
+        rules = {
+            chunk = '(name | long)*',
+        },
+    })
+    assert.is_nil(plain.lexer.delimited[1].nest)
+end
+
+-- Lua 5.1 long brackets: level 0 rejects a nested [[, the levels with "="
+-- do not; the long comment is "--" followed by either, and the line
+-- comment is a pattern token. doc is a counted block behind "#".
+local PREFIXED = compiled_of({
+    tokens = {
+        name = '[a-z]+',
+        space = '[ \\n]+',
+        comment = '"--" [^\\n]*',
+        long_string = {
+            open = '"[["',
+            close = '"]]"',
+            nest = 'error',
+        },
+        long_level = {
+            open = '"[" level "["',
+            close = '"]" level "]"',
+            level = '"="+',
+        },
+        long_comment = {
+            prefix = '"--"',
+            match = {
+                'long_string',
+                'long_level',
+            },
+        },
+        block = {
+            open = '"(*"',
+            close = '"*)"',
+            nest = 'count',
+        },
+        doc = {
+            prefix = '"#"',
+            match = {
+                'block',
+            },
+        },
+    },
+    rules = {
+        chunk = '(name | long_string | long_level | block | doc)*',
+    },
+})
+
+function testcase.tokenize_reads_prefixed_delimited_tokens()
+    assert.equal(lex(PREFIXED, '--[[ a ]] x -- y\n--[x\n---[[ z'), {
+        'long_comment:--[[ a ]]',
+        'space: ',
+        'name:x',
+        'space: ',
+        'comment:-- y',
+        'space:\n',
+        'comment:--[x',
+        'space:\n',
+        'comment:---[[ z',
+    })
+    -- the long comment wins over the longer line comment
+    assert.equal(lex(PREFIXED, '--[==[ ]=] ]==] x'), {
+        'long_comment:--[==[ ]=] ]==]',
+        'space: ',
+        'name:x',
+    })
+    -- the named table is still a token of its own
+    assert.equal(lex(PREFIXED, '[[ a ]][=[ b ]=]'), {
+        'long_string:[[ a ]]',
+        'long_level:[=[ b ]=]',
+    })
+end
+
+function testcase.tokenize_nests_prefixed_tokens_by_the_named_table()
+    -- a nested open is the open of the named table, without the prefix
+    assert.equal(lex(PREFIXED, '--[[ a [[ b ]] c'), {
+        'long_comment:--[[ a [[ b ]]?',
+        'space: ',
+        'name:c',
+    })
+    assert.equal({
+        tokenizer.tokenize(PREFIXED, '--[[ a --[[ b ]]', 1),
+    }, {
+        PREFIXED.names.long_comment,
+        17,
+        'nested',
+        10,
+    })
+    assert.equal(lex(PREFIXED, '--[=[ [[ ]] ]=]'), {
+        'long_comment:--[=[ [[ ]] ]=]',
+    })
+    assert.equal(lex(PREFIXED, '#(* a (* b *) c #(* d *) *) e'), {
+        'doc:#(* a (* b *) c #(* d *) *)',
+        'space: ',
+        'name:e',
+    })
+    assert.equal(lex(PREFIXED, '--[=[ a'), {
+        'long_comment:--[=[ a!',
+    })
+end
+
+-- a shebang line as a leading token, and "#" as the length operator
+local LEADING = compiled_of({
+    tokens = {
+        name = '[a-z]+',
+        space = '[ \\n]+',
+        shebang = '"#" [^\\n]*',
+        long = {
+            open = '"#["',
+            close = '"]"',
+        },
+    },
+    symbols = {
+        '#',
+    },
+    leading = {
+        'shebang',
+    },
+    skip = {
+        'shebang',
+    },
+    rules = {
+        chunk = '("#" name | long | name)*',
+    },
+})
+
+function testcase.tokenize_tries_leading_tokens_at_the_start_only()
+    assert.equal(lex(LEADING, '#!/bin/lua\n#t #x'), {
+        'shebang:#!/bin/lua',
+        'space:\n',
+        '#:#',
+        'name:t',
+        'space: ',
+        '#:#',
+        'name:x',
+    })
+    -- at the start, a leading token wins over a literal of the same length
+    -- and over the open of a delimited token
+    assert.equal(lex(LEADING, '#'), {
+        'shebang:#',
+    })
+    assert.equal(lex(LEADING, '#[a] #[b]'), {
+        'shebang:#[a] #[b]',
+    })
+    -- the start of input only, not the start of a later call
+    assert.equal({
+        tokenizer.tokenize(LEADING, 'a #[b]', 3),
+    }, {
+        LEADING.names.long,
+        7,
+    })
+    -- without a match at the start, tokenizing goes on as usual
+    assert.equal(lex(LEADING, 'a #b'), {
+        'name:a',
+        'space: ',
+        '#:#',
+        'name:b',
+    })
+end
+
+function testcase.compile_keeps_the_leading_automaton_apart()
+    assert.equal(LEADING.lexer.leading.accept[1], 0)
+    assert.equal(LEADING.kinds[LEADING.names.shebang], {
+        name = 'shebang',
+        category = 'token',
+        skip = true,
+    })
+    assert.is_nil(NESTED.lexer.leading)
 end

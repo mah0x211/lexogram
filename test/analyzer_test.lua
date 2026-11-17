@@ -1002,3 +1002,97 @@ function testcase.parse_raises_for_invalid_arguments()
     err = assert.throws(analyzer.parse, compiled, 1)
     assert.match(err, 'source must be string, got number')
 end
+
+function testcase.parse_reports_forbidden_nested_opens()
+    local compiled = compiled_of({
+        tokens = {
+            name = '[a-z]+',
+            space = '[ \\n]+',
+            long = {
+                open = '"[["',
+                close = '"]]"',
+                nest = 'error',
+            },
+        },
+        rules = {
+            chunk = '(name | long)*',
+        },
+    })
+    parse_ok(compiled, 'a [[ b ]] c')
+
+    local result, err = analyzer.parse(compiled, 'a\n[[ b [[ c ]]')
+
+    assert.is_nil(result)
+    assert.equal(err, {
+        code = 'nested_delimiter',
+        pos = 8,
+        line = 2,
+        column = 6,
+        actual = compiled.names.long,
+        expected = {},
+        message = 'nested delimiter in long',
+    })
+end
+
+function testcase.parse_skips_a_leading_token()
+    local compiled = compiled_of({
+        tokens = {
+            name = '[a-z]+',
+            space = '[ \\n]+',
+            shebang = '"#" [^\\n]*',
+        },
+        symbols = {
+            '#',
+        },
+        leading = {
+            'shebang',
+        },
+        skip = {
+            'space',
+            'shebang',
+        },
+        rules = {
+            chunk = '("#"? name)*',
+        },
+    })
+
+    -- the shebang line is a skipped token before the first rule
+    assert.equal(rows(parse_ok(compiled, '#!x\n#a')), {
+        {
+            'TOKEN',
+            'shebang',
+            1,
+            4,
+        },
+        {
+            'TOKEN',
+            'space',
+            4,
+            5,
+        },
+        {
+            'ENTER',
+            'chunk',
+            5,
+            6,
+        },
+        {
+            'TOKEN',
+            '#',
+            5,
+            6,
+        },
+        {
+            'TOKEN',
+            'name',
+            6,
+            7,
+        },
+        {
+            'EXIT',
+            'chunk',
+            7,
+            3,
+        },
+    })
+end

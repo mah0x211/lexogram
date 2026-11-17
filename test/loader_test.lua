@@ -289,10 +289,17 @@ function testcase.import_returns_error_for_invalid_name()
                  FIXTURES .. 'import_number.lua:1: invalid import name: number')
     assert.equal(load_err('import_empty'),
                  FIXTURES .. 'import_empty.lua:1: invalid import name: ""')
-    assert.equal(load_err('import_slash'), FIXTURES ..
-                     'import_slash.lua:1: invalid import name: "sub/leaf"')
     assert.equal(load_err('import_dot'), FIXTURES ..
                      'import_dot.lua:1: invalid import name: "plain.lua"')
+end
+
+function testcase.import_reaches_files_below_the_directory()
+    local grammar, err = loader.load(FIXTURES .. 'import_slash.lua')
+
+    assert.is_nil(err)
+    assert.equal(grammar, {
+        where = 'sub',
+    })
 end
 
 function testcase.import_error_names_file_after_tail_call()
@@ -448,8 +455,28 @@ function testcase.import_rejects_names_that_leave_the_directory()
             '../plain',
         },
         {
-            'slash',
-            'sub/leaf',
+            'trailing_slash',
+            'sub/',
+        },
+        {
+            'double_slash',
+            'sub//leaf',
+        },
+        {
+            'inner_dotdot',
+            'sub/../plain',
+        },
+        {
+            'builtin_dotdot',
+            'lexogram:../plain',
+        },
+        {
+            'builtin_slash',
+            'lexogram:sub/leaf',
+        },
+        {
+            'other_prefix',
+            'other:plain',
         },
         {
             'backslash',
@@ -525,4 +552,109 @@ function testcase.import_does_not_reach_valid_grammar_outside_directory()
         assert.is_nil(grammar)
         assert.match(err, 'invalid import name')
     end
+end
+
+-- extends
+
+local EXTENDS = ROOT .. 'test/fixtures/extends/'
+
+function testcase.extends_merges_into_the_base_through_every_level()
+    local grammar, err = loader.load(EXTENDS .. 'grandchild.lua')
+
+    assert.is_nil(err)
+    assert.equal(grammar, {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+            space = '[ \\n]+',
+            number = 'DIGIT+',
+            shebang = '"#" [^\\n]*',
+        },
+        skip = {
+            'space',
+            'shebang',
+        },
+        leading = {
+            'shebang',
+        },
+        rules = {
+            chunk = '(name | number)*',
+        },
+    })
+    -- the merged grammar compiles
+    local compiled, diagnostics = require('lexogram').compile(grammar)
+    assert.is_table(compiled)
+    assert.equal(diagnostics, {})
+end
+
+function testcase.extends_resolves_names_from_the_file_that_writes_them()
+    -- deep extends sub/inner, and sub/inner extends sub/leaf
+    assert.equal(loader.load(EXTENDS .. 'deep.lua'), {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+        },
+        rules = {
+            chunk = 'name',
+            other = 'name',
+        },
+    })
+    -- a file may import and extend the same grammar
+    assert.equal(loader.load(EXTENDS .. 'import_and_extend.lua'),
+                 loader.load(EXTENDS .. 'base.lua'))
+end
+
+function testcase.extends_reads_built_in_grammars()
+    local grammar, err = loader.load(EXTENDS .. 'from_builtin.lua',
+                                     EXTENDS .. 'builtin/')
+
+    assert.is_nil(err)
+    assert.equal(grammar, loader.load(EXTENDS .. 'builtin/mini.lua'))
+    -- the installed directory has no grammar of that name
+    grammar, err = loader.load(EXTENDS .. 'builtin_missing.lua')
+    assert.is_nil(grammar)
+    assert.match(err, '^' .. EXTENDS:gsub('%p', '%%%0') ..
+                     'builtin_missing%.lua: cannot extend "lexogram:mini": ',
+                 false)
+end
+
+function testcase.extends_reports_errors()
+    local function err_of(name)
+        local grammar, err = loader.load(EXTENDS .. name .. '.lua')
+        assert.is_nil(grammar)
+        return err
+    end
+
+    assert.equal(err_of('self'),
+                 EXTENDS .. 'self.lua: circular extends: ' .. EXTENDS ..
+                     'self.lua -> ' .. EXTENDS .. 'self.lua')
+    assert.match(err_of('cycle_a'),
+                 EXTENDS .. 'cycle_b.lua: circular' .. ' extends: ' .. EXTENDS ..
+                     'cycle_a.lua -> ' .. EXTENDS .. 'cycle_b.lua -> ' ..
+                     EXTENDS .. 'cycle_a.lua', true)
+    assert.match(err_of('missing'),
+                 EXTENDS .. 'missing.lua: cannot extend "nothing": ', true)
+    assert.equal(err_of('bad_name'),
+                 EXTENDS .. 'bad_name.lua: invalid extends name: "../base"')
+    assert.equal(err_of('number_name'),
+                 EXTENDS .. 'number_name.lua: invalid extends name: number')
+    assert.equal(err_of('bad_merge'),
+                 EXTENDS .. 'bad_merge.lua: tokens.name: already exists')
+end
+
+function testcase.builtin_grammars_need_a_loader_loaded_from_a_file()
+    -- the module compiled from a string does not know its own directory
+    local f = assert(open(ROOT .. 'lib/loader.lua', 'rb'))
+    local src = f:read('*a')
+    f:close()
+    local chunk = assert((loadstring or load)(src, '=loader'))
+    local strayed = chunk()
+
+    local grammar, err = strayed.load(EXTENDS .. 'builtin_missing.lua')
+    assert.is_nil(grammar)
+    assert.equal(err, EXTENDS .. 'builtin_missing.lua: built-in grammars' ..
+                     ' are not available: lexogram.loader was not loaded' ..
+                     ' from a file')
 end

@@ -33,6 +33,14 @@
 -- occurrence. When the first part is the capture, every position is tried
 -- the same way. In the worst case this takes O(n * m) byte comparisons for
 -- a body of n bytes and a close of m bytes.
+--
+-- With nest set, the body is scanned position by position: the close is
+-- tried first, then the open automaton; an open of the inner entry (the
+-- delimited token itself, or the table named by a prefixed table) with the
+-- same captured bytes either opens a nested level that needs its own close
+-- (nest = 'count'), or is reported (nest = 'error': the token still ends
+-- at the first close, so tokenizing can go on, and the position of the
+-- first such open is returned).
 local type = type
 local error = error
 local floor = math.floor
@@ -159,50 +167,132 @@ local function find_close(close, source, from, len, cap_start, cap_end)
     return nil
 end
 
---- delimited_token returns kind and the stop of the delimited token kind
---- whose open matched source from pos to open_stop, with true as a third
---- value if it is unterminated.
+--- same_capture returns true if the capture of an open of entry matched at
+--- at holds the same bytes as cap_start..cap_end - 1 (always true for an
+--- entry without a capture).
+--- @param entry table
+--- @param source string
+--- @param at integer
+--- @param len integer
+--- @param cap_start integer
+--- @param cap_end integer
+--- @return boolean
+local function same_capture(entry, source, at, len, cap_start, cap_end)
+    if not entry.capture then
+        return true
+    end
+    local first = at + entry.prefix
+    local stop = capture_end(entry.capture, source, first, len)
+    if stop - first ~= cap_end - cap_start then
+        return false
+    end
+    for j = 0, stop - first - 1 do
+        if byte(source, first + j) ~= byte(source, cap_start + j) then
+            return false
+        end
+    end
+    return true
+end
+
+--- scan_nested scans the body of a delimited token with a nest setting
+--- from from and returns the position after its close (nil when there is
+--- none) and the position of the first nested open found with nest =
+--- 'error'.
 --- @param lexer table
---- @param kind integer
+--- @param entry table
+--- @param source string
+--- @param from integer
+--- @param len integer
+--- @param cap_start integer
+--- @param cap_end integer
+--- @return integer? stop
+--- @return integer? nested
+local function scan_nested(lexer, entry, source, from, len, cap_start, cap_end)
+    local close, count = entry.close, entry.nest == 'count'
+    local depth, nested = 0, nil
+    local at = from
+    while at <= len do
+        local stop = match_close(close, 1, source, at, len, cap_start, cap_end)
+        if stop then
+            if depth == 0 then
+                return stop, nested
+            end
+            depth = depth - 1
+            at = stop
+        else
+            local index, open_stop = longest(lexer.open, source, at, len)
+            if index == entry.inner and
+                same_capture(lexer.delimited[index], source, at, len, cap_start,
+                             cap_end) then
+                if count then
+                    depth = depth + 1
+                    at = open_stop
+                else
+                    nested = nested or at
+                    at = at + 1
+                end
+            else
+                at = at + 1
+            end
+        end
+    end
+    return nil, nested
+end
+
+--- delimited_token returns the kind and the stop of the delimited token of
+--- the entry index whose open matched source from pos to open_stop; a third
+--- value 'unterminated' marks a token without close (it runs to the end of
+--- input), and 'nested' with a fourth value marks an open nested at that
+--- position in a token whose nest is 'error'.
+--- @param lexer table
+--- @param index integer
 --- @param source string
 --- @param pos integer
 --- @param open_stop integer
 --- @param len integer
 --- @return integer kind
 --- @return integer stop
---- @return boolean? unterminated
-local function delimited_token(lexer, kind, source, pos, open_stop, len)
-    local list = lexer.delimited
-    local entry
-    for i = 1, #list do
-        if list[i].id == kind then
-            entry = list[i]
-            break
-        end
-    end
+--- @return string? problem 'unterminated' or 'nested'
+--- @return integer? at position of the nested open
+local function delimited_token(lexer, index, source, pos, open_stop, len)
+    local entry = lexer.delimited[index]
+    local kind = entry.id
     local cap_start, cap_end = pos, pos
     if entry.capture then
         cap_start = pos + entry.prefix
         cap_end = capture_end(entry.capture, source, cap_start, len)
     end
-    local stop = find_close(entry.close, source, open_stop, len, cap_start,
-                            cap_end)
-    if not stop then
-        return kind, len + 1, true
+    local stop, nested
+    if entry.nest then
+        stop, nested = scan_nested(lexer, entry, source, open_stop, len,
+                                   cap_start, cap_end)
+    else
+        stop = find_close(entry.close, source, open_stop, len, cap_start,
+                          cap_end)
+    end
+    if nested then
+        return kind, stop or len + 1, 'nested', nested
+    elseif not stop then
+        return kind, len + 1, 'unterminated'
     end
     return kind, stop
 end
 
 --- tokenize returns the kind of the token of source starting at pos and the
---- position after it, or nil at the end of input. A third value true marks
---- a delimited token without close, which runs to the end of input.
+--- position after it, or nil at the end of input. At pos 1, a leading token
+--- wins over every other token. A third value
+--- 'unterminated' marks a delimited token without close, which runs to the
+--- end of input; 'nested', with the position of the nested open as a fourth
+--- value, marks a delimited token whose nest is 'error' containing an open
+--- of itself (the token still ends at its first close).
 --- @param compiled table result of lexogram.compile
 --- @param source string
 --- @param pos integer 1 <= pos <= #source + 1
 --- @param mode string? nil or 'default'
 --- @return integer? kind
 --- @return integer? stop
---- @return boolean? unterminated
+--- @return string? problem 'unterminated' or 'nested'
+--- @return integer? at position of the nested open
 local function tokenize(compiled, source, pos, mode)
     if type(compiled) ~= 'table' then
         error('compiled must be table, got ' .. type(compiled), 2)
@@ -221,10 +311,19 @@ local function tokenize(compiled, source, pos, mode)
         return nil
     end
     local lexer = compiled.lexer
-    local kind, stop = longest(lexer.open, source, pos, len)
-    if kind then
-        return delimited_token(lexer, kind, source, pos, stop, len)
+    -- leading tokens are tried at the start of input only, before the rest
+    local leading = pos == 1 and lexer.leading
+    if leading then
+        local kind, stop = longest(leading, source, pos, len)
+        if kind then
+            return kind, stop
+        end
     end
+    local index, stop = longest(lexer.open, source, pos, len)
+    if index then
+        return delimited_token(lexer, index, source, pos, stop, len)
+    end
+    local kind
     kind, stop = longest(lexer, source, pos, len)
     if kind then
         return kind, stop

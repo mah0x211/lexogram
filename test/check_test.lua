@@ -1952,3 +1952,270 @@ function testcase.check_accepts_realistic_syntax()
         },
     }), {})
 end
+
+-- nest of delimited token tables
+
+-- a complete grammar with one delimited token table "block" whose nest is
+-- value
+local function nest_grammar(value)
+    return {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+            block = {
+                open = '"/*"',
+                close = '"*/"',
+                nest = value,
+            },
+        },
+        rules = {
+            chunk = '(name | block)*',
+        },
+    }
+end
+
+function testcase.check_accepts_nest_values()
+    assert.equal(check.check(nest_grammar('count')), {})
+    assert.equal(check.check(nest_grammar('error')), {})
+    assert.equal(check.check(nest_grammar(nil)), {})
+end
+
+function testcase.check_reports_invalid_nest_values()
+    assert.equal(check.check(nest_grammar('none')), {
+        err('invalid_value', 'tokens.block.nest',
+            'tokens.block.nest must be ' .. '"count" or "error", got "none"'),
+    })
+    assert.equal(check.check(nest_grammar(true)), {
+        err('invalid_type', 'tokens.block.nest',
+            'tokens.block.nest must be string, got boolean'),
+    })
+    assert.equal(check.check(nest_grammar({})), {
+        err('reserved_item', 'tokens.block.nest', 'tokens.block.nest: a ' ..
+                'table value is reserved for a future version'),
+    })
+end
+
+--- a complete grammar with the delimited token tables "block" and "level",
+--- and the prefixed table "doc" whose fields are fields
+local function prefixed_grammar(fields)
+    return {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+            _dash = '"-"',
+            block = {
+                open = '"[["',
+                close = '"]]"',
+                nest = 'error',
+            },
+            level = {
+                open = '"[" eq "["',
+                close = '"]" eq "]"',
+                eq = '"="+',
+            },
+            doc = fields,
+        },
+        skip = {
+            'doc',
+        },
+        rules = {
+            chunk = 'name*',
+        },
+    }
+end
+
+function testcase.check_accepts_prefixed_tables()
+    -- block and level are used through doc only, which is not unused
+    assert.equal(check.check(prefixed_grammar({
+        prefix = '_dash _dash',
+        match = {
+            'block',
+            'level',
+        },
+    })), {})
+end
+
+function testcase.check_reports_prefixed_table_structure()
+    assert.equal(check.check(prefixed_grammar({
+        prefix = 1,
+        open = '"x"',
+        [1] = 'x',
+    })), {
+        err('invalid_key', 'tokens.doc[1]', 'key tokens.doc[1] must be string'),
+        err('missing_field', 'tokens.doc.match',
+            'required field tokens.doc.match is missing'),
+        err('unknown_field', 'tokens.doc.open',
+            'unknown field tokens.doc.open (a table with prefix or match' ..
+                ' is a prefixed delimited token table)'),
+        err('invalid_type', 'tokens.doc.prefix',
+            'tokens.doc.prefix must be string, got number'),
+    })
+    assert.equal(check.check(prefixed_grammar({
+        match = 'block',
+    })), {
+        err('invalid_type', 'tokens.doc.match',
+            'tokens.doc.match must be table, got string'),
+        err('missing_field', 'tokens.doc.prefix',
+            'required field tokens.doc.prefix is missing'),
+    })
+    assert.equal(check.check(prefixed_grammar({
+        prefix = '"-"',
+        match = {},
+    })), {
+        err('invalid_value', 'tokens.doc.match',
+            'tokens.doc.match must have at least one item'),
+    })
+    assert.equal(check.check(prefixed_grammar({
+        prefix = '"-"',
+        match = {
+            'block',
+            '',
+            'block',
+            true,
+            x = 'level',
+        },
+    })), {
+        err('empty_item', 'tokens.doc.match[2]',
+            'tokens.doc.match[2] must not be empty'),
+        err('duplicate_item', 'tokens.doc.match[3]',
+            'tokens.doc.match[3] duplicates the item at index 1'),
+        err('invalid_type', 'tokens.doc.match[4]',
+            'tokens.doc.match[4] must be string, got boolean'),
+        err('unknown_field', 'tokens.doc.match.x',
+            'unknown field tokens.doc.match.x'),
+    })
+end
+
+function testcase.check_reports_prefixed_table_references()
+    local g = prefixed_grammar({
+        prefix = '"-" name',
+        match = {
+            'block',
+            'none',
+            'name',
+            'other',
+        },
+    })
+    g.tokens.other = {
+        prefix = '"+"',
+        match = {
+            'doc',
+        },
+    }
+    g.skip[2] = 'other'
+    local diagnostics = check.check(g)
+    for _, d in ipairs(diagnostics) do
+        d.pos = nil
+    end
+
+    assert.equal(diagnostics, {
+        err('undefined_reference', 'tokens.doc.match[2]',
+            'tokens.doc.match[2] refers to undefined delimited token "none"'),
+        err('invalid_reference', 'tokens.doc.match[3]',
+            'tokens.doc.match[3] refers to "name", which is not a delimited' ..
+                ' token table with open and close'),
+        err('invalid_reference', 'tokens.doc.match[4]',
+            'tokens.doc.match[4] refers to "other", which is not a delimited' ..
+                ' token table with open and close'),
+        -- the prefix is a token pattern: it may refer to fragments only
+        err('invalid_reference', 'tokens.doc.prefix', 'only fragment names' ..
+                ' (starting with "_") may be referenced: name'),
+        err('invalid_reference', 'tokens.other.match[1]',
+            'tokens.other.match[1] refers to "doc", which is not a delimited' ..
+                ' token table with open and close'),
+    })
+end
+
+--- a complete grammar with the leading list leading
+local function leading_grammar(leading)
+    return {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+            shebang = '"#" [^\\n]*',
+            _hash = '"#"',
+            block = {
+                open = '"/*"',
+                close = '"*/"',
+            },
+        },
+        symbols = {
+            '#',
+        },
+        skip = {
+            'shebang',
+            'block',
+        },
+        leading = leading,
+        rules = {
+            chunk = '("#" name)*',
+            other = 'chunk',
+        },
+    }
+end
+
+function testcase.check_accepts_leading_tokens()
+    local diagnostics = check.check(leading_grammar({
+        'shebang',
+    }))
+    for i = #diagnostics, 1, -1 do
+        if diagnostics[i].code == 'unreachable_rule' then
+            table.remove(diagnostics, i)
+        end
+    end
+    assert.equal(diagnostics, {
+        warn('unused_fragment', 'tokens._hash',
+             'tokens._hash is not used by any token pattern'),
+    })
+end
+
+function testcase.check_reports_leading_problems()
+    assert.equal(check.check(leading_grammar('shebang')), {
+        err('invalid_type', 'leading', 'leading must be table, got string'),
+    })
+    assert.equal(check.check(leading_grammar({
+        'shebang',
+        '',
+        'shebang',
+        x = 'name',
+    })), {
+        err('empty_item', 'leading[2]', 'leading[2] must not be empty'),
+        err('duplicate_item', 'leading[3]',
+            'leading[3] duplicates the item at index 1'),
+        err('unknown_field', 'leading.x', 'unknown field leading.x'),
+    })
+    assert.equal(check.check(leading_grammar({
+        'none',
+        '_hash',
+        'other',
+        'block',
+    })), {
+        err('undefined_reference', 'leading[1]',
+            'leading[1] refers to undefined token "none"'),
+        err('invalid_reference', 'leading[2]', 'leading[2] refers to' ..
+                ' "_hash", which is a fragment, not a token'),
+        err('invalid_reference', 'leading[3]',
+            'leading[3] refers to "other", which is a rule, not a token'),
+        err('invalid_reference', 'leading[4]', 'leading[4] refers to' ..
+                ' "block", which is a delimited token table, not a pattern' ..
+                ' token (reserved for a future version)'),
+    })
+end
+
+function testcase.check_rejects_unresolved_extends()
+    -- extends and marked keys are resolved by lexogram.load only
+    local g = leading_grammar(nil)
+    g.extends = 'base'
+    g['+skip'] = {
+        'block',
+    }
+    local diagnostics = check.check(g)
+
+    assert.equal(diagnostics[1],
+                 err('unknown_field', '["+skip"]', 'unknown field ["+skip"]'))
+    assert.equal(diagnostics[2],
+                 err('unknown_field', 'extends', 'unknown field extends'))
+end
