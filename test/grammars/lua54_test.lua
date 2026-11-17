@@ -214,3 +214,15 @@ function testcase.tokens_of_lua54()
         '):)',
     })
 end
+
+function testcase.other_rules_are_those_of_lua53()
+    -- the parser of Lua 5.4 has the operators and priorities of Lua 5.3
+    -- (lparser.c), so the rules of expressions, as every rule other than
+    -- those of local statements, are those of lua53, whose trees
+    -- test/grammars/lua53_expression_test.lua checks
+    local rules = assert(lexogram.load('lexogram:lua54')).rules
+    local lua53 = assert(lexogram.load('lexogram:lua53')).rules
+    rules.localstat, rules.attnamelist, rules.attrib = nil, nil, nil
+    lua53.localstat = nil
+    assert.equal(rules, lua53)
+end
