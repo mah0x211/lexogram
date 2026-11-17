@@ -20,7 +20,8 @@
 -- THE SOFTWARE.
 --
 --
--- Lua 5.2 grammar for lexogram.
+-- Lua 5.2 grammar for lexogram. doc/grammars/lua52.md has the same text
+-- in Markdown.
 --
 -- The grammar extends "lexogram:lua51" with the changes of the Lua 5.2
 -- reference manual (section 9, the complete syntax, and section 3.1, the
