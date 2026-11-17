@@ -30,7 +30,8 @@
 -- must name a built-in grammar, since a module has no directory) and runs
 -- every check of lexogram.check. It returns a function that returns a new
 -- copy of the checked grammar on each call, so that no caller can change
--- the definition, or nil, a message and the diagnostics. The function is
+-- the definition, nil and the diagnostics (warnings only), or nil, a
+-- message and the diagnostics. The function is
 -- compiled from the Lua source of the grammar (see lexogram.source): each
 -- call runs the table constructors, without walking a table to copy it.
 local type = type
@@ -87,8 +88,9 @@ end
 
 --- new checks the grammar def, merged into the grammar it extends if it
 --- has extends, and returns a function that returns a new copy of the
---- result on each call. On an error it returns nil, a message (one line
---- per error, for assert) and, when the check ran, its diagnostics.
+--- result on each call, nil and the diagnostics of the check (warnings
+--- only). On an error it returns nil, a message (one line per error, for
+--- assert) and, when the check ran, its diagnostics.
 --- @param def table
 --- @return function? fn
 --- @return string? err
@@ -133,7 +135,7 @@ local function new(def)
     local src = assert(write(grammar, {}))
     local chunk = assert(load_text('return function()\n' .. src .. 'end\n',
                                    '=lexogram.grammar:' .. grammar.name, {}))
-    return chunk()
+    return chunk(), nil, diagnostics
 end
 
 return setmetatable({

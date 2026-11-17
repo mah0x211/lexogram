@@ -69,7 +69,7 @@ return assert(require('lexogram.grammar')({
 }))
 ```
 
-`require('lexogram.grammar')(def)` merges `def` into the grammar it extends, if any, and runs every check of `lexogram.check`. Without errors it returns a function that returns a new copy of the checked grammar on each call, so that no caller can change the definition; with errors it returns `nil`, a message with one line per error, and the diagnostics. A module has no directory, so its `extends` can name built-in grammars only, and it cannot use `import`.
+`require('lexogram.grammar')(def)` merges `def` into the grammar it extends, if any, and runs every check of `lexogram.check`. Without errors it returns a function that returns a new copy of the checked grammar on each call, so that no caller can change the definition, `nil`, and the diagnostics (warnings only, such as an unreachable rule); with errors it returns `nil`, a message with one line per error, and the diagnostics. A module has no directory, so its `extends` can name built-in grammars only, and it cannot use `import`.
 
 ## Top-level fields
 

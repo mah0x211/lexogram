@@ -47,7 +47,7 @@ function testcase.new_returns_a_function_of_new_copies()
     local fn, err, diagnostics = grammar(def)
 
     assert.is_nil(err)
-    assert.is_nil(diagnostics)
+    assert.equal(diagnostics, {})
     assert.is_function(fn)
     local a = fn()
     assert.equal(a, base())
@@ -101,12 +101,15 @@ function testcase.new_reports_errors_of_the_check()
     fn, err = grammar(def)
     assert.is_nil(fn)
     assert.equal(select(2, err:gsub('\n', '')) + 1, 2)
-    -- warnings are no errors
+    -- warnings are no errors, and are returned with the function
     def = base()
-    def.tokens.unused = 'DIGIT+'
-    fn, err = grammar(def)
+    def.rules.unused = 'name'
+    fn, err, diagnostics = grammar(def)
     assert.is_function(fn)
     assert.is_nil(err)
+    assert.equal(#diagnostics, 1)
+    assert.equal(diagnostics[1].severity, 'warning')
+    assert.equal(diagnostics[1].code, 'unreachable_rule')
 end
 
 function testcase.new_reports_errors_of_extends()
@@ -163,4 +166,64 @@ function testcase.builtin_reports_modules_of_other_shapes()
     package.preload['lexogram.grammars.broken'] = nil
     assert.is_nil(g)
     assert.equal(err, 'broken module')
+end
+
+function testcase.built_in_grammars_have_no_warnings()
+    -- the built-in grammars are the modules installed by the rockspec; the
+    -- test runner executes a test file with its own directory as the
+    -- working directory
+    local f = assert(io.open('../rockspecs/lexogram-scm-1.rockspec'))
+    local spec = f:read('*a')
+    f:close()
+    local modules = {}
+    for module in spec:gmatch('"(lexogram%.grammars%.[%w_]+)"') do
+        modules[#modules + 1] = module
+    end
+    assert(#modules > 0)
+
+    -- record what lexogram.grammar returns while the modules are loaded
+    -- again; the check runs without the coverage hook, under which it takes
+    -- far too long
+    local returned = {}
+    local loaded = {}
+    package.loaded['lexogram.grammar'] = setmetatable({
+        new = grammar.new,
+        builtin = grammar.builtin,
+    }, {
+        __call = function(_, def)
+            local fn, err, diagnostics = grammar(def)
+            returned[#returned + 1] = {
+                def.name,
+                diagnostics,
+            }
+            return fn, err, diagnostics
+        end,
+    })
+    for _, module in ipairs(modules) do
+        loaded[module] = package.loaded[module]
+        package.loaded[module] = nil
+    end
+    local hook, mask, count = debug.gethook()
+    debug.sethook()
+    local ok, err = pcall(function()
+        for _, module in ipairs(modules) do
+            require(module)
+        end
+    end)
+    if hook then
+        debug.sethook(hook, mask, count)
+    end
+    package.loaded['lexogram.grammar'] = grammar
+    for _, module in ipairs(modules) do
+        package.loaded[module] = loaded[module]
+    end
+    assert(ok, err)
+
+    assert.equal(#returned, #modules)
+    for _, r in ipairs(returned) do
+        assert.equal(r, {
+            r[1],
+            {},
+        })
+    end
 end
