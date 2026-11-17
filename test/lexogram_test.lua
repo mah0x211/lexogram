@@ -126,6 +126,24 @@ function testcase.merge_writes_a_grammar_that_extends_none()
     })
 end
 
+function testcase.merge_writes_the_mixins_and_returns_their_warnings()
+    local pathname = ROOT .. 'test/fixtures/mixins/warn.lua'
+    local src, err, warnings = lexogram.merge(pathname)
+
+    assert.is_nil(err)
+    assert.not_match(src, 'embeds', true)
+    local fn = assert((loadstring or load)(src))
+    assert.equal(fn(), lexogram.load(pathname))
+    assert.equal(warnings, select(3, lexogram.load(pathname)))
+    assert.equal(#warnings, 2)
+    -- no warnings
+    local _
+    _, err, warnings =
+        lexogram.merge(ROOT .. 'test/fixtures/mixins/grammar.lua')
+    assert.is_nil(err)
+    assert.equal(warnings, {})
+end
+
 function testcase.merge_reports_errors()
     local src, err = lexogram.merge(ROOT ..
                                         'test/fixtures/extends/bad_merge.lua')

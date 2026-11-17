@@ -26,6 +26,7 @@ local result, err = lexogram.parse(compiled, source)
 - [greedy](#greedy)
 - [recover](#recover)
 - [extends](#extends)
+- [Mixins](#mixins): `mixin`, `embeds`
 - [Patterns](#patterns)
 - [How tokens are chosen](#how-tokens-are-chosen)
 - [How rules are applied](#how-rules-are-applied)
@@ -69,7 +70,7 @@ return assert(require('lexogram.grammar')({
 }))
 ```
 
-`require('lexogram.grammar')(def)` merges `def` into the grammar it extends, if any, and runs every check of `lexogram.check`. Without errors it returns a function that returns a new copy of the checked grammar on each call, so that no caller can change the definition, `nil`, and the diagnostics (warnings only, such as an unreachable rule); with errors it returns `nil`, a message with one line per error, and the diagnostics. A module has no directory, so its `extends` can name built-in grammars only, and it cannot use `import`.
+`require('lexogram.grammar')(def)` merges `def` into the grammar it extends, if any, and runs every check of `lexogram.check`. Without errors it returns a function that returns a new copy of the checked grammar on each call, so that no caller can change the definition, `nil`, and the diagnostics (warnings only, such as an unreachable rule); with errors it returns `nil`, a message with one line per error, and the diagnostics. A module has no directory, so its `extends` and `embeds` can name built-in grammars and mixins only, and it cannot use `import`. A [mixin](#mixins) module is written the same way.
 
 ## Top-level fields
 
@@ -88,6 +89,7 @@ return assert(require('lexogram.grammar')({
 | `greedy` | | array of rule names | Rules whose repetitions are greedy by intent |
 | `recover` | | array of rule names | Rules to recover in after a syntax error (not implemented yet) |
 | `extends` | | grammar name | The grammar this one is a difference of; resolved by `lexogram.load` |
+| `embeds` | | array of mixin names | The [mixins](#mixins) applied after the base; needs `extends` |
 
 An unknown field is an error, so that a field added in a later revision cannot collide with an existing grammar.
 
@@ -266,10 +268,47 @@ tokens = { ['--long_string'] = { 'nest' } },    -- remove a setting of a token
 
 - The target `X` must exist in the base. The top-level table fields (`tokens`, `rules`, `symbols`, `keywords`, `skip`, `leading`, `greedy`, `recover`) exist as empty tables when the base has none.
 - In one table, removals (`-`, `--`) are applied first, then replacements and entered tables (`=`, unmarked), then additions (`+`, `++`). `=X` and `X` together are an error.
-- `extends`, `lexogram`, `name` and `version` are written without a mark. `lexogram` is inherited when it is not written; `name` and `version` are not inherited, so that a derived grammar never keeps the name of its base. `start` is replaced with `['=start']`.
+- `extends`, `embeds`, `mixin`, `lexogram`, `name` and `version` are written without a mark. `lexogram` is inherited when it is not written; `name` and `version` are not inherited, so that a derived grammar never keeps the name of its base. `start` is replaced with `['=start']`.
 - An error of the merge is returned by `lexogram.load` as `nil, "<file>: <path>: <reason>"`.
 
 `lexogram.merge(name)` returns the Lua source of the merged grammar, which extends no grammar and loads back into an equal table, in the same form on every runtime.
+
+## Mixins
+
+A mixin is a difference without a base, written once and embedded in grammars that extend different bases. It has `mixin = true`, and its other fields are operations written with the same [marks](#extends):
+
+```lua
+-- shebang.lua
+return {
+    mixin = true,
+    lexogram = '2026.11.15.1',
+    name = 'shebang',
+    version = '1.0.0',
+    ['++tokens'] = { shebang = [[ "#" [^\n]* ]] },
+    ['+leading'] = { 'shebang' },
+    ['+skip'] = { 'shebang' },
+}
+
+-- lua51_shebang.lua
+return {
+    extends = 'lexogram:lua51',
+    embeds = { 'shebang' },
+    name = 'lua51_shebang',
+    version = '1.0.0',
+}
+```
+
+- **Embedding**: `embeds` is a non-empty array of names of mixins (the names of [extends](#extends)). A grammar needs `extends` to embed mixins. The base is merged first, then each mixin in the order of `embeds`, then the difference of the grammar itself.
+- **Extending a mixin**: a mixin may extend another mixin with `extends`, but not a grammar, and it cannot embed. Embedding it applies the mixin it extends first, then its own difference. A grammar cannot extend a mixin, and `lexogram.load`, `lexogram.merge` and `import` reject a mixin, which is no complete grammar.
+- **Marks in a mixin**: a mixin is written without knowing its base, so an item (`+X`) or a field (`++X`) that already exists, in the base or from an earlier mixin, is not added, with an `already_defined` warning. A replacement (`=X`) replaces what an earlier mixin wrote: the later one wins. The other marks work as in a difference of `extends`, and the difference of the grammar itself stays as strict as ever.
+- **Embedding twice**: a mixin that two items of `embeds` bring in is an error, such as `embeds = { 'shebang', 'bom_shebang' }` where `bom_shebang` extends `shebang`: `cannot embed "shebang": it is already embedded through "bom_shebang"`.
+- **Checks**: `lexogram.load` checks the metadata of a mixin (`lexogram`, `name`, `version` are required, `mixin` must be `true`) and the shape of its operations; whether their targets exist is known only in the grammar that embeds it, which is checked as a whole. The `lexogram`, `name` and `version` of a mixin do not change the grammar.
+- **Errors and warnings**: an error of a mixin names it: `"<file>: <mixin>: <path>: <reason>"`. The warnings are returned, not printed: `lexogram.load` and `lexogram.merge` return them after `nil` (`grammar, nil, warnings`), and `lexogram.grammar` before the warnings of the check.
+
+```lua
+{ severity = 'warning', code = 'already_defined', path = 'tokens.shebang',
+  source = 'lexogram:shebang', message = 'tokens.shebang already exists; it is not added' }
+```
 
 ## Patterns
 
@@ -355,3 +394,4 @@ The compilation also rejects a repetition of an element that can match nothing (
 | Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `automaton_too_large` |
 | Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice` |
 | Warnings | `never_adopted`, `undeclared_greedy`, `unneeded_greedy`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
+| Warnings of the merge | `already_defined` (a [mixin](#mixins) adds what exists; returned by `lexogram.load`, `lexogram.merge` and `lexogram.grammar`, with the mixin as `source`) |

@@ -308,3 +308,288 @@ function testcase.extend_does_not_inherit_name_and_version()
         ['=name'] = 'x',
     })), 'name: does not exist')
 end
+
+-- mixins
+
+local validate = require('lexogram.extend').validate
+local embeds = require('lexogram.extend').embeds
+
+-- a chain of one mixin
+local function chain(source, diff)
+    return {
+        {
+            source = source,
+            diff = diff,
+        },
+    }
+end
+
+function testcase.extend_applies_mixins_before_the_difference()
+    local grammar, err, warnings = extend(base(), {
+        extends = 'base',
+        embeds = {
+            'a',
+        },
+        name = 'derived',
+        tokens = {
+            ['=number'] = 'DIGIT+ ("." DIGIT+)?',
+        },
+    }, {
+        {
+            {
+                source = 'a',
+                diff = {
+                    mixin = true,
+                    lexogram = '0.0.0',
+                    name = 'a',
+                    version = '9.9.9',
+                    ['++tokens'] = {
+                        number = 'DIGIT+',
+                    },
+                },
+            },
+            {
+                source = 'b',
+                diff = {
+                    mixin = true,
+                    extends = 'a',
+                    ['+skip'] = {
+                        'number',
+                    },
+                },
+            },
+        },
+    })
+
+    assert.is_nil(err)
+    assert.equal(warnings, {})
+    -- the metadata of the mixins is not taken
+    assert.equal(grammar.lexogram, '2026.11.15.1')
+    assert.equal(grammar.name, 'derived')
+    assert.is_nil(grammar.version)
+    assert.is_nil(grammar.mixin)
+    assert.is_nil(grammar.embeds)
+    -- the chain is applied in order, then the difference of the grammar
+    assert.equal(grammar.tokens.number, 'DIGIT+ ("." DIGIT+)?')
+    assert.equal(grammar.skip, {
+        'space',
+        'number',
+    })
+end
+
+function testcase.extend_skips_what_mixins_add_twice_with_warnings()
+    local grammar, err, warnings = extend(base(), {}, {
+        chain('a', {
+            ['+keywords'] = {
+                'goto',
+                'until',
+            },
+            ['++tokens'] = {
+                name = '"x"',
+                number = 'DIGIT+',
+            },
+        }),
+        chain('b', {
+            ['++tokens'] = {
+                number = 'HEXDIGIT+',
+            },
+            tokens = {
+                ['=space'] = '"\\t"+',
+            },
+        }),
+        chain('c', {
+            tokens = {
+                ['=space'] = '"\\n"+',
+            },
+        }),
+    })
+
+    assert.is_nil(err)
+    -- an addition keeps what exists, wherever it comes from
+    assert.equal(grammar.keywords, {
+        'local',
+        'goto',
+        'until',
+    })
+    assert.equal(grammar.tokens.name, '[a-z]+')
+    assert.equal(grammar.tokens.number, 'DIGIT+')
+    -- a replacement replaces what an earlier mixin wrote
+    assert.equal(grammar.tokens.space, '"\\n"+')
+    assert.equal(warnings, {
+        {
+            severity = 'warning',
+            code = 'already_defined',
+            path = 'keywords',
+            message = 'keywords already has "goto"; it is not added',
+            source = 'a',
+        },
+        {
+            severity = 'warning',
+            code = 'already_defined',
+            path = 'tokens.name',
+            message = 'tokens.name already exists; it is not added',
+            source = 'a',
+        },
+        {
+            severity = 'warning',
+            code = 'already_defined',
+            path = 'tokens.number',
+            message = 'tokens.number already exists; it is not added',
+            source = 'b',
+        },
+    })
+end
+
+function testcase.extend_reports_errors_of_mixins()
+    local function mixin_err_of(diff, mixins)
+        local grammar, err = extend(base(), diff, mixins)
+        assert.is_nil(grammar)
+        return err
+    end
+
+    -- the other marks work as for extends, and the error names the mixin
+    assert.equal(mixin_err_of({}, {
+        chain('a', {
+            ['--rules'] = {
+                'none',
+            },
+        }),
+    }), 'a: rules.none: does not exist')
+    assert.equal(mixin_err_of({}, {
+        chain('a', {
+            tokens = {
+                ['=none'] = '"x"',
+            },
+        }),
+    }), 'a: tokens.none: does not exist')
+    -- the difference of the grammar itself stays strict
+    assert.equal(mixin_err_of({
+        ['++tokens'] = {
+            number = 'DIGIT+',
+        },
+    }, {
+        chain('a', {
+            ['++tokens'] = {
+                number = 'DIGIT+',
+            },
+        }),
+    }), 'tokens.number: already exists')
+end
+
+function testcase.extend_reports_mixins_embedded_twice()
+    local a = {
+        source = 'a',
+        diff = {},
+    }
+    local b = {
+        source = 'b',
+        diff = {},
+    }
+    local c = {
+        source = 'c',
+        diff = {},
+    }
+    local function embed_err_of(...)
+        local grammar, err = extend(base(), {}, {
+            ...,
+        })
+        assert.is_nil(grammar)
+        return err
+    end
+
+    assert.equal(embed_err_of({
+        a,
+    }, {
+        a,
+    }), 'cannot embed "a" twice')
+    -- b extends a
+    assert.equal(embed_err_of({
+        a,
+    }, {
+        a,
+        b,
+    }), 'cannot embed "a": it is already embedded through "b"')
+    assert.equal(embed_err_of({
+        a,
+        b,
+    }, {
+        a,
+    }), 'cannot embed "a": it is already embedded through "b"')
+    -- b and c extend a
+    assert.equal(embed_err_of({
+        a,
+        b,
+    }, {
+        a,
+        c,
+    }), 'cannot embed "a" twice: through "b" and "c"')
+end
+
+function testcase.validate_checks_the_shape_of_a_mixin()
+    -- the targets need not exist, and the metadata is left out
+    assert.is_nil(validate({
+        mixin = true,
+        extends = 'other',
+        lexogram = '2026.11.15.1',
+        name = 'm',
+        version = '1.0.0',
+        ['--rules'] = {
+            'none',
+        },
+        tokens = {
+            ['=none'] = '"x"',
+            block = {
+                ['++nest'] = {
+                    x = 1,
+                },
+            },
+        },
+    }))
+    assert.equal(validate({
+        ['+skip'] = 'space',
+    }), '+skip: the value must be an array of items')
+    assert.equal(validate({
+        ['+foo'] = {},
+    }), '+foo: unknown field')
+    assert.equal(validate({
+        start = 'x',
+    }), 'start: a value without a mark must be a table' ..
+                     ' (write =start to replace the value)')
+    assert.equal(validate({
+        tokens = {
+            block = {
+                ['--nest'] = 'x',
+            },
+        },
+    }), '--tokens.block.nest: the value must be an array of names')
+    assert.equal(validate({
+        tokens = {
+            [1] = {},
+        },
+    }), 'tokens: key 1 must be a string')
+end
+
+function testcase.embeds_returns_the_names()
+    assert.equal(embeds({
+        embeds = {
+            'a',
+            'b',
+        },
+    }), {
+        'a',
+        'b',
+    })
+    for _, v in ipairs({
+        'a',
+        {},
+        {
+            x = 'a',
+        },
+    }) do
+        local names, err = embeds({
+            embeds = v,
+        })
+        assert.is_nil(names)
+        assert.equal(err, 'embeds must be a non-empty array of names')
+    end
+end

@@ -21,7 +21,8 @@
 --
 -- lexogram: public entry point of the lexogram library.
 -- load(pathname) loads a grammar file and resolves the grammar it
--- extends (see lexogram.loader and lexogram.extend),
+-- extends and the mixins it embeds (see lexogram.loader and
+-- lexogram.extend),
 -- check(grammar) returns the diagnostics of a grammar table (see
 -- lexogram.check), compile(grammar) compiles it into plain data (see
 -- lexogram.compile), tokenize(compiled, source, pos, mode) finds the
@@ -39,16 +40,19 @@ local tokenizer = require('lexogram.tokenizer')
 local write = require('lexogram.source').write
 
 --- merge loads the grammar file at pathname, merges it with the grammars it
---- extends and returns the Lua source text of the result, which extends no
---- grammar and loads back into an equal table, or nil and an error message.
+--- extends and the mixins it embeds, and returns the Lua source text of the
+--- result, which extends no grammar and loads back into an equal table, nil
+--- and the warnings of the mixins (see lexogram.loader); or nil and an
+--- error message.
 --- @param pathname string a grammar file or "lexogram:name"
 --- @return string? source
 --- @return string? err
+--- @return table[]? warnings
 local function merge(pathname)
     if type(pathname) ~= 'string' then
         error('pathname must be string, got ' .. type(pathname), 2)
     end
-    local grammar, err = loader.load(pathname)
+    local grammar, err, warnings = loader.load(pathname)
     if not grammar then
         return nil, err
     end
@@ -64,7 +68,7 @@ local function merge(pathname)
     if not source then
         return nil, pathname .. ': ' .. err
     end
-    return source
+    return source, nil, warnings
 end
 
 return {
