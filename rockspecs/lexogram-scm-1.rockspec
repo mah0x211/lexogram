@@ -41,6 +41,7 @@ build = {
         ["lexogram.grammars.lua53"] = "grammars/lua53.lua",
         ["lexogram.grammars.lua53_shebang"] = "grammars/lua53_shebang.lua",
         ["lexogram.grammars.lua54"] = "grammars/lua54.lua",
+        ["lexogram.grammars.lua54_shebang"] = "grammars/lua54_shebang.lua",
         ["lexogram.grammars.shebang"] = "grammars/shebang.lua",
         ["lexogram.loader"] = "lib/loader.lua",
         ["lexogram.pattern"] = "lib/pattern.lua",
