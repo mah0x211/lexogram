@@ -38,7 +38,8 @@
 -- empty tables when the base has none. An item or field to add must not
 -- exist, and one to remove or replace must. In each table, removals are
 -- applied first, then replacements and entered tables, then additions.
--- At the top level, extends and lexogram are written without a mark.
+-- At the top level, extends, lexogram, name and version are written
+-- without a mark; name and version are not inherited.
 local type = type
 local next = next
 local ipairs = ipairs
@@ -62,7 +63,18 @@ local TABLE_FIELDS = {
 }
 local VALUE_FIELDS = {
     lexogram = true,
+    name = true,
+    version = true,
     start = true,
+}
+
+-- Fields that tell about the file itself: written without a mark, and
+-- name and version are not inherited.
+local OWN_FIELDS = {
+    extends = true,
+    lexogram = true,
+    name = true,
+    version = true,
 }
 
 -- The phase of each mark: removals, then replacements and entered tables,
@@ -355,20 +367,22 @@ function apply(t, diff, path, root)
 end
 
 --- extend returns a copy of the grammar base with the difference table diff
---- applied, or nil and an error message. diff.extends is not applied, and
---- diff.lexogram (without a mark) replaces the version of the base.
+--- applied, or nil and an error message. diff.extends is not applied,
+--- diff.lexogram (without a mark) replaces the version of the base, and the
+--- result has the name and version of diff only.
 --- @param base table
 --- @param diff table
 --- @return table? grammar
 --- @return string? err
 local function extend(base, diff)
     local grammar = copy(base, {})
+    grammar.name, grammar.version = nil, nil
     local rest = {}
     for k, v in next, diff do
-        if k == 'lexogram' then
-            grammar.lexogram = copy(v, {})
-        elseif k ~= 'extends' then
+        if not OWN_FIELDS[k] then
             rest[k] = v
+        elseif k ~= 'extends' then
+            grammar[k] = copy(v, {})
         end
     end
     local err = apply(grammar, rest, '', true)

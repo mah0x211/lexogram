@@ -8,6 +8,8 @@ local dfa = require('lexogram.compile.dfa')
 local function grammar(tokens, symbols, keywords)
     return {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 's',
         tokens = tokens,
         symbols = symbols,

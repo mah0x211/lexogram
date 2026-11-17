@@ -32,6 +32,7 @@ build = {
         ["lexogram.compile.utf8range"] = "lib/compile/utf8range.lua",
         ["lexogram.events"] = "lib/events.lua",
         ["lexogram.extend"] = "lib/extend.lua",
+        ["lexogram.grammar"] = "lib/grammar.lua",
         ["lexogram.loader"] = "lib/loader.lua",
         ["lexogram.pattern"] = "lib/pattern.lua",
         ["lexogram.source"] = "lib/source.lua",

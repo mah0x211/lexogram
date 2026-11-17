@@ -9,6 +9,8 @@ local TOKEN, ENTER = events.TOKEN, events.ENTER
 -- whose terms and operators are listed flat inside expr
 local COMPILED = assert(lexogram.compile({
     lexogram = '2026.11.15.1',
+    name = 'test',
+    version = '1.0.0',
     start = 'chunk',
     tokens = {
         name = '[A-Za-z_] [A-Za-z0-9_]*',

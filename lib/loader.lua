@@ -30,9 +30,9 @@
 -- are resolved the same way: "name" or "dir/name" is the file name.lua
 -- below the directory of the file that writes it (each part matches
 -- ^[A-Za-z0-9_-]+$, so a name cannot go up, be absolute or hold a drive),
--- and "lexogram:name" is the built-in grammar name.lua installed in the
--- grammars directory next to this module (lexogram/grammars/). A grammar
--- whose table has extends is merged into a copy of that grammar by
+-- and "lexogram:name" is the built-in grammar of the module
+-- lexogram.grammars.name, read with require (see lexogram.grammar). A
+-- grammar whose table has extends is merged into a copy of that grammar by
 -- lexogram.extend after the file has run.
 local type = type
 local error = error
@@ -47,12 +47,12 @@ local find = string.find
 local match = string.match
 local gmatch = string.gmatch
 local byte = string.byte
-local sub = string.sub
 local rawget = rawget
 local concat = table.concat
 local getinfo = debug.getinfo
 local load_text = require('lexogram.compat').load_text
 local extend = require('lexogram.extend').extend
+local builtin = require('lexogram.grammar').builtin
 
 -- Pattern of a part of a grammar name.
 local PART = '[A-Za-z0-9_-]+'
@@ -162,22 +162,15 @@ local load_file
 --- so a name cannot contain "\", ".", whitespace, control characters or a
 --- NUL byte, and therefore cannot go up (".."), be absolute, hold a drive
 --- or be cut by a C library.
---- @param state table
 --- @param pathname string
 --- @param name any
---- @return string? resolved
---- @return string? err set when name is valid but cannot be resolved
-local function resolve(state, pathname, name)
+--- @return string? resolved the pathname, or the name of a built-in
+--- grammar ("lexogram:name")
+local function resolve(pathname, name)
     if type(name) ~= 'string' then
         return nil
-    end
-    local builtin = match(name, '^lexogram:(' .. PART .. ')$')
-    if builtin then
-        if not state.builtin then
-            return nil, 'built-in grammars are not available: ' ..
-                       'lexogram.loader was not loaded from a file'
-        end
-        return state.builtin .. builtin .. '.lua'
+    elseif find(name, '^lexogram:' .. PART .. '$') then
+        return name
     elseif find(name, '^' .. PART .. '$') or
         find(name, '^' .. PART .. '/[A-Za-z0-9_/-]*[A-Za-z0-9_-]$') and
         not find(name, '//', 1, true) then
@@ -195,7 +188,11 @@ end
 --- @return table? grammar
 --- @return string? err
 local function get_grammar(state, resolved, circular)
-    if state.active[resolved] then
+    local name = match(resolved, '^lexogram:(.*)$')
+    if name then
+        -- a new copy on each call (a built-in grammar extends no grammar)
+        return builtin(name)
+    elseif state.active[resolved] then
         return nil,
                'circular ' .. circular .. ': ' .. concat(state.stack, ' -> ') ..
                    ' -> ' .. resolved
@@ -218,10 +215,10 @@ end
 --- @return function
 local function new_import(state, pathname)
     return function(name)
-        local resolved, why = resolve(state, pathname, name)
+        local resolved = resolve(pathname, name)
         if not resolved then
-            raise_import_error(pathname, why or 'invalid import name: ' ..
-                                   describe_name(name))
+            raise_import_error(pathname,
+                               'invalid import name: ' .. describe_name(name))
         end
         local tbl, err = get_grammar(state, resolved, 'import')
         if not tbl then
@@ -245,10 +242,10 @@ end
 --- @return string? err
 local function resolve_extends(state, pathname, diff)
     local name = rawget(diff, 'extends')
-    local resolved, why = resolve(state, pathname, name)
+    local resolved = resolve(pathname, name)
     if not resolved then
-        return nil, pathname .. ': ' ..
-                   (why or 'invalid extends name: ' .. describe_name(name))
+        return nil,
+               pathname .. ': invalid extends name: ' .. describe_name(name)
     end
     local base, err = get_grammar(state, resolved, 'extends')
     if not base then
@@ -337,30 +334,16 @@ local function normalize(pathname)
     return path
 end
 
---- builtin_dir returns the directory of the built-in grammars: grammars/
---- next to this module, or nil when the module was not loaded from a file.
---- @return string?
-local function builtin_dir()
-    local source = getinfo(1, 'S').source
-    if byte(source, 1) == 64 then -- "@"
-        return dirname(sub(source, 2)) .. 'grammars/'
-    end
-    return nil
-end
-
-local BUILTIN_DIR = builtin_dir()
-
 --- load loads the grammar file at pathname and returns the table it
---- returns, merged into the grammar it extends if it has extends. Imported
+--- returns, merged into the grammar it extends if it has extends, or a new
+--- copy of the built-in grammar when pathname is "lexogram:name". Imported
 --- and extended files are executed at most once per call. The pathname is
 --- normalized first and the normalized form is used everywhere, including
 --- in error messages.
 --- @param pathname string
---- @param builtin string? for tests only: the directory of the built-in
---- grammars (with a trailing "/") instead of the installed one
 --- @return table? grammar
 --- @return string? err
-local function load(pathname, builtin)
+local function load(pathname)
     if type(pathname) ~= 'string' then
         error('pathname must be string, got ' .. type(pathname), 2)
     elseif find(pathname, '\0', 1, true) then
@@ -369,9 +352,16 @@ local function load(pathname, builtin)
         return nil, 'pathname must not contain a NUL byte'
     end
 
+    local name = match(pathname, '^lexogram:(' .. PART .. ')$')
+    if name then
+        local grammar, err = builtin(name)
+        if not grammar then
+            return nil, pathname .. ': ' .. err
+        end
+        return grammar
+    end
+
     return load_file({
-        -- directory of the built-in grammars
-        builtin = builtin or BUILTIN_DIR,
         -- resolved pathname -> grammar of the imported or extended file
         cache = {},
         -- pathnames of the files being loaded, outermost first

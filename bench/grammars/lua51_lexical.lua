@@ -6,6 +6,8 @@
 -- benchmark measures the analyzer on every token.
 return {
     lexogram = '2026.11.15.1',
+    name = 'lua51_lexical',
+    version = '1.0.0',
     start = 'chunk',
     tokens = {
         name = [[ (ALPHA | "_") (ALPHA | DIGIT | "_")* ]],

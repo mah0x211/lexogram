@@ -284,3 +284,27 @@ function testcase.extend_applies_removals_before_additions()
         close = '")"',
     })
 end
+
+function testcase.extend_does_not_inherit_name_and_version()
+    local b = base()
+    b.name = 'base'
+    b.version = '1.2.3'
+
+    local grammar = extend(b, {
+        extends = 'base',
+    })
+    assert.is_nil(grammar.name)
+    assert.is_nil(grammar.version)
+
+    grammar = extend(b, {
+        extends = 'base',
+        name = 'derived',
+        version = '1.0.0',
+    })
+    assert.equal(grammar.name, 'derived')
+    assert.equal(grammar.version, '1.0.0')
+    -- they are written without a mark: there is nothing to replace
+    assert.equal(select(2, extend(b, {
+        ['=name'] = 'x',
+    })), 'name: does not exist')
+end

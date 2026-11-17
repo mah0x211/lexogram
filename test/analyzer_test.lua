@@ -10,6 +10,8 @@ local TOKEN, ENTER, EXIT = analyzer.TOKEN, analyzer.ENTER, analyzer.EXIT
 local function compiled_of(fields)
     local g = {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '[a-z]+',

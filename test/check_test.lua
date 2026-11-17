@@ -6,6 +6,8 @@ local check = require('lexogram.check')
 local function valid_grammar()
     return {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'expr',
         tokens = {
             number = '[0-9]+',
@@ -73,6 +75,8 @@ function testcase.check_returns_empty_list_for_valid_grammar()
     -- only the required fields
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'expr',
         tokens = {
             n = 'DIGIT+',
@@ -117,6 +121,8 @@ end
 function testcase.check_reports_every_missing_field_in_order()
     assert.equal(check.check({}), {
         err('missing_field', 'lexogram', 'required field lexogram is missing'),
+        err('missing_field', 'name', 'required field name is missing'),
+        err('missing_field', 'version', 'required field version is missing'),
         err('missing_field', 'start', 'required field start is missing'),
         err('missing_field', 'tokens', 'required field tokens is missing'),
         err('missing_field', 'rules', 'required field rules is missing'),
@@ -126,6 +132,8 @@ end
 function testcase.check_reports_wrong_field_types_without_inner_checks()
     assert.equal(check.check({
         lexogram = 1,
+        name = 1,
+        version = true,
         start = {},
         tokens = 'x',
         rules = 1,
@@ -136,6 +144,8 @@ function testcase.check_reports_wrong_field_types_without_inner_checks()
         recover = false,
     }), {
         err('invalid_type', 'lexogram', 'lexogram must be string, got number'),
+        err('invalid_type', 'name', 'name must be string, got number'),
+        err('invalid_type', 'version', 'version must be string, got boolean'),
         err('invalid_type', 'start', 'start must be string, got table'),
         err('invalid_type', 'tokens', 'tokens must be table, got string'),
         err('invalid_type', 'symbols', 'symbols must be table, got boolean'),
@@ -682,6 +692,8 @@ function testcase.check_returns_deterministic_order()
     local expected = {
         err('invalid_version', 'lexogram', 'invalid version "bad": ' ..
                 'version must have the form yyyy.mm.dd.n'),
+        err('missing_field', 'name', 'required field name is missing'),
+        err('missing_field', 'version', 'required field version is missing'),
         err('missing_field', 'start', 'required field start is missing'),
         err('invalid_key', 'tokens[2]', 'key tokens[2] must be string'),
         err('missing_field', 'tokens.a.close',
@@ -813,6 +825,8 @@ end
 function testcase.check_reports_too_deeply_nested_pattern()
     local ok, diagnostics = pcall(check.check, {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 's',
         tokens = {},
         rules = {
@@ -871,6 +885,8 @@ end
 local function names_grammar(fields)
     local grammar = {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'expr',
         tokens = {},
         symbols = {
@@ -1229,6 +1245,8 @@ function testcase.check_names_pass_tolerates_malformed_fields()
     -- fields of the wrong type
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = {},
         tokens = 'x',
         rules = 1,
@@ -1247,6 +1265,8 @@ function testcase.check_names_pass_tolerates_malformed_fields()
     -- missing fields: references are not checked without tokens and rules
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'nope',
         skip = {
             'nope',
@@ -1304,6 +1324,8 @@ end
 function testcase.check_orders_structure_and_name_diagnostics()
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'num',
         tokens = {
             num = 1,
@@ -1350,6 +1372,8 @@ end
 local function lua_like_grammar()
     return {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '(ALPHA | "_") (ALPHA | DIGIT | "_")*',
@@ -1506,6 +1530,8 @@ function testcase.check_reports_undeclared_literals()
     -- without symbols and keywords every literal is undeclared
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 's',
         tokens = {},
         rules = {
@@ -1582,6 +1608,8 @@ end
 function testcase.check_reports_parse_errors_without_reference_checks()
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'a',
         tokens = 1,
         rules = {
@@ -1594,6 +1622,8 @@ function testcase.check_reports_parse_errors_without_reference_checks()
     })
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'a',
         tokens = {
             x = '_nope ""',
@@ -1662,6 +1692,8 @@ function testcase.check_reports_unreachable_rules()
     -- start may be the only rule
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 's',
         tokens = {
             t = '"t"',
@@ -1743,6 +1775,8 @@ end
 function testcase.check_accepts_realistic_token_set()
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '(ALPHA | "_") (ALPHA | DIGIT | "_")*',
@@ -1813,6 +1847,8 @@ end
 function testcase.check_rejects_delimited_token_named_like_fragment()
     local ok, diagnostics = pcall(check.check, {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 's',
         tokens = {
             n = '"n" _d',
@@ -1894,6 +1930,8 @@ end
 function testcase.check_accepts_realistic_syntax()
     assert.equal(check.check({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '(ALPHA | "_") (ALPHA | DIGIT | "_")*',
@@ -1960,6 +1998,8 @@ end
 local function nest_grammar(value)
     return {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '[a-z]+',
@@ -2001,6 +2041,8 @@ end
 local function prefixed_grammar(fields)
     return {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '[a-z]+',
@@ -2132,6 +2174,8 @@ end
 local function leading_grammar(leading)
     return {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '[a-z]+',
@@ -2218,4 +2262,17 @@ function testcase.check_rejects_unresolved_extends()
                  err('unknown_field', '["+skip"]', 'unknown field ["+skip"]'))
     assert.equal(diagnostics[2],
                  err('unknown_field', 'extends', 'unknown field extends'))
+end
+
+function testcase.check_reports_invalid_name_and_version()
+    local g = valid_grammar()
+    g.name = 'lua 5.1'
+    g.version = '1.0'
+
+    assert.equal(check.check(g), {
+        err('invalid_value', 'name',
+            'name must match ^[A-Za-z0-9_-]+$, got "lua 5.1"'),
+        err('invalid_value', 'version',
+            'version must be MAJOR.MINOR.PATCH, got "1.0"'),
+    })
 end

@@ -19,6 +19,8 @@ local COMMIT = codegen.COMMIT
 local function grammar(fields)
     local g = {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 's',
         tokens = {
             name = 'ALPHA ALPHA+',

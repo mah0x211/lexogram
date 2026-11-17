@@ -8,6 +8,8 @@ local char = string.char
 local function compiled_of(fields)
     local grammar = {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         rules = {
             chunk = 'name*',
