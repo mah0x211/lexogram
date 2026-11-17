@@ -1,0 +1,115 @@
+local testcase = require('testcase')
+local assert = require('assert')
+-- the file is loaded before the test runner moves to its directory, so the
+-- helper is found next to the file itself
+local conformance = dofile(debug.getinfo(1, 'S').source:match('^@(.-)[^/]*$') ..
+                               'conformance.lua')
+
+-- the test runner executes a test file with its own directory as the
+-- working directory; the cases are in lua54/
+local CASES = 'lua54/'
+
+-- cases that Lua 5.4 and the grammars treat the same way
+local AGREE = {
+    'attribute_on_for',
+    'attribute_on_function',
+    'attributes',
+    'break_statement',
+    'byte_order_mark',
+    'byte_order_mark_shebang',
+    'call_on_new_line',
+    'empty_statements',
+    'escapes',
+    'goto_as_name',
+    'goto_label',
+    'hex_floats',
+    'integers',
+    'invalid_escape',
+    'nested_long_brackets',
+    'operators',
+    'return_semicolon',
+    'shebang',
+    'short_hex_escape',
+    'split_integer_division',
+    'split_not_equal',
+    'statement_after_return',
+    'unclosed_attribute',
+    'utf8_empty',
+    'utf8_escape',
+    'utf8_large',
+    'utf8_without_brace',
+}
+
+-- cases that the grammars accept and Lua 5.4 rejects: checks that are not
+-- syntax (the target of an assignment, a statement that is not a call, a
+-- break outside a loop, "..." outside a vararg function, a decimal escape
+-- above 255, a \u escape at 80000000 or above, the checks of goto: a
+-- missing label, a jump into the scope of a local, a label defined twice,
+-- and the checks of the attributes: an unknown name, two <close>
+-- variables, an assignment to a <const> variable), and tokens that the
+-- official lexer rejects as a whole (malformed numbers, a numeral that
+-- touches a letter)
+local WIDER = {
+    'assign_to_const',
+    'break_outside',
+    'call_as_target',
+    'duplicate_label',
+    'escape_too_large',
+    'expression_statement',
+    'goto_into_scope',
+    'goto_without_label',
+    'malformed_hex_float',
+    'malformed_number',
+    'number_touching_name',
+    'two_close',
+    'unknown_attribute',
+    'utf8_too_large',
+    'vararg_outside',
+}
+
+local LUAC = conformance.find_luac('5.4', 'LEXOGRAM_LUAC54',
+                                   'lua54_conformance_test')
+
+-- whether luac, lua54 and lua54_shebang accept the case name
+local function judge(name)
+    return conformance.judge(LUAC, 'lexogram:lua54', 'lexogram:lua54_shebang',
+                             true, CASES .. name .. '.lua')
+end
+
+function testcase.cases_agree_with_lua54()
+    if not LUAC then
+        return
+    end
+    for _, name in ipairs(AGREE) do
+        local official, base, shebang = judge(name)
+        assert.equal({
+            name,
+            base,
+            shebang,
+        }, {
+            name,
+            official,
+            official,
+        })
+    end
+end
+
+function testcase.documented_differences_remain()
+    if not LUAC then
+        return
+    end
+    for _, name in ipairs(WIDER) do
+        local official, base, shebang = judge(name)
+        assert.equal({
+            name,
+            official,
+            base,
+            shebang,
+        }, {
+            name,
+            false,
+            true,
+            true,
+        })
+    end
+end
