@@ -20,12 +20,14 @@
 -- THE SOFTWARE.
 --
 --
--- Lua 5.3 grammar for lexogram.
+-- Lua 5.3 grammar for lexogram. doc/grammars/lua53.md has the same text
+-- in Markdown.
 --
 -- The grammar extends "lexogram:lua52" with the changes of the Lua 5.3
 -- reference manual (section 9, the complete syntax, and section 3.1, the
 -- lexical conventions) and of its lexer and parser (llex.c, lparser.c).
--- What it inherits is described with lua52 and lua51; the sections below
+-- doc/grammars/lua52.md and doc/grammars/lua51.md describe what it
+-- inherits; the sections below
 -- follow the top-level fields of the table returned at the end of this
 -- file and tell what changes.
 --
