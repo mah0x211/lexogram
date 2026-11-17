@@ -59,6 +59,8 @@
 --                                   (same shape, absent without a capture)
 --                          close    array of parts { literal = <string> }
 --                                   or { capture = true }
+--                          nest     'count' or 'error' (absent: an open in
+--                                   the body is ordinary text)
 --
 -- Tokenizing: at a position, if the open automaton accepts a non-empty
 -- prefix, the delimited token with the longest open wins. After its open
@@ -143,6 +145,7 @@ local function delimited_entries(defs, tokens)
                 prefix = token.prefix,
                 capture = token.capture and automaton(token.capture),
                 close = close,
+                nest = token.nest,
             }
         end
     end

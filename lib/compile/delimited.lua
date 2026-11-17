@@ -30,7 +30,13 @@
 -- string is the concatenation of the close parts, with each capture part
 -- replaced by the captured bytes. The body ends at the first occurrence of
 -- the close string after the open; without one, the token runs to the end
--- of the input.
+-- of the input. With nest = 'count', an occurrence of this open with the
+-- same captured bytes inside the body opens a nested level that needs its
+-- own close; with nest = 'error', it is an error. The close is looked for
+-- before the open at each position.
+--
+-- The setting keys open, close and nest are not capture definitions;
+-- every other key is.
 --
 -- The functions take a limits table { nfa = { max_states }, dfa =
 -- { max_states } } that is passed to nfa.build and dfa.build (tests only;
@@ -47,6 +53,14 @@ local parse = require('lexogram.pattern').parse
 local quote = require('lexogram.text').quote
 local nfa = require('lexogram.compile.nfa')
 local dfa = require('lexogram.compile.dfa')
+
+-- Setting keys of a delimited token table; every other key defines a
+-- capture.
+local SETTINGS = {
+    open = true,
+    close = true,
+    nest = true,
+}
 
 -- Prefix of the synthetic fragment names that stand for captures in the
 -- open automaton. A NUL byte never occurs in a user name.
@@ -518,7 +532,7 @@ end
 local function new_analysis(name, tbl, fragments, diagnostics)
     local captures, keys, capdefs = {}, {}, {}
     for k in next, tbl do
-        if k ~= 'open' and k ~= 'close' then
+        if not SETTINGS[k] then
             captures[k] = true
             keys[#keys + 1] = k
         end
@@ -603,6 +617,7 @@ local function analyze(name, tbl, fragments, diagnostics, limits)
             prefix = prefix,
             capture = capture,
             close = parts,
+            nest = rawget(tbl, 'nest'),
         },
     }
 end
@@ -670,6 +685,7 @@ end
 
 return {
     examples = examples,
+    SETTINGS = SETTINGS,
     analyze = analyze,
     build_open = build_open,
 }

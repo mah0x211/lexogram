@@ -44,8 +44,9 @@
 -- token; rewinding drops the events after it, empties the lookahead and
 -- tokenizes again from the saved position.
 --
--- Error recovery is not implemented yet: the first syntax error, or an
--- unterminated delimited token, stops the analysis with nil and an error
+-- Error recovery is not implemented yet: the first syntax error, or a
+-- delimited token that is unterminated or has a nested open forbidden by
+-- its nest setting, stops the analysis with nil and an error
 -- { code, pos, line, column, expected, actual, message } (column in bytes,
 -- see lexogram.events).
 local type = type
@@ -192,7 +193,7 @@ local function parse(compiled, source)
     local qk, qs, qe = {}, {}, {}
     local qh, qt = 1, 0
     local raw_pos = 1
-    local failure -- error of an unterminated token
+    local failure -- error of a delimited token
 
     -- frames: return address, rule kind, ENTER event number, start, and
     -- the largest stop of the rules that ended inside it
@@ -209,21 +210,29 @@ local function parse(compiled, source)
     local nexp = 0
 
     --- read appends the next raw token to the queue; false at the end of
-    --- input or after an unterminated token.
+    --- input or after an erroneous delimited token.
     local function read()
         if raw_pos > len or failure then
             return false
         end
-        local k, stop, unterminated = tokenize(compiled, source, raw_pos)
+        local k, stop, problem, at = tokenize(compiled, source, raw_pos)
         qt = qt + 1
         qk[qt], qs[qt], qe[qt] = k, raw_pos, stop
-        if unterminated then
+        if problem == 'unterminated' then
             failure = {
                 code = 'unterminated_token',
                 pos = raw_pos,
                 actual = k,
                 expected = {},
                 message = 'unterminated ' .. kind_label(kinds, k),
+            }
+        elseif problem then
+            failure = {
+                code = 'nested_delimiter',
+                pos = at,
+                actual = k,
+                expected = {},
+                message = 'nested delimiter in ' .. kind_label(kinds, k),
             }
         end
         raw_pos = stop
@@ -431,7 +440,8 @@ local function parse(compiled, source)
             ntry = ntry - 1
             pc = pc + 1
         end
-        -- an unterminated token stops the analysis wherever it was read
+        -- an erroneous delimited token stops the analysis wherever it was
+        -- read
         if failure then
             err = failure
             break

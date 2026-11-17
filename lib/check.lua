@@ -46,6 +46,7 @@ local text = require('lexogram.text')
 local escape_key = text.escape
 local quote = text.quote
 local build_lexer = require('lexogram.compile.lexer').build
+local DELIMITED_SETTINGS = require('lexogram.compile.delimited').SETTINGS
 local analyze_syntax = require('lexogram.compile.syntax').analyze
 local parse_pattern = require('lexogram.pattern').parse
 
@@ -321,6 +322,30 @@ local function check_lexogram(ctx, segments, value)
     end
 end
 
+-- Values of the nest setting of a delimited token table.
+local NEST_VALUES = {
+    count = true,
+    error = true,
+}
+
+--- check_nest checks the nest setting of a delimited token table.
+--- @param ctx table
+--- @param segments any[]
+--- @param value any
+local function check_nest(ctx, segments, value)
+    local t = type(value)
+    if t == 'table' then
+        add_error(ctx, 'reserved_item', segments, label(segments) ..
+                      ': a table value is reserved for a future version')
+    elseif t ~= 'string' then
+        add_error(ctx, 'invalid_type', segments,
+                  label(segments) .. ' must be string, got ' .. t)
+    elseif not NEST_VALUES[value] then
+        add_error(ctx, 'invalid_value', segments, label(segments) ..
+                      ' must be "count" or "error", got ' .. quote(value))
+    end
+end
+
 --- check_delimited checks a delimited token table.
 --- @param ctx table
 --- @param segments any[]
@@ -338,6 +363,8 @@ local function check_delimited(ctx, segments, tbl)
         local segs = child(segments, k)
         if type(k) ~= 'string' then
             string_key_required(ctx, segs)
+        elseif k == 'nest' then
+            check_nest(ctx, segs, v)
         else
             expect_type(ctx, segs, v, 'string')
         end
@@ -674,7 +701,7 @@ end
 --- @param tbl table
 local function check_captures(ctx, segments, tbl)
     for k in next, tbl do
-        if type(k) == 'string' and k ~= 'open' and k ~= 'close' then
+        if type(k) == 'string' and not DELIMITED_SETTINGS[k] then
             local segs = child(segments, k)
             if byte(k, 1) == UNDERSCORE then
                 add_error(ctx, 'invalid_name', segs,
@@ -904,12 +931,13 @@ end
 local function parse_delimited(ctx, segments, tbl)
     local captures = {}
     for k in next, tbl do
-        if type(k) == 'string' and k ~= 'open' and k ~= 'close' then
+        if type(k) == 'string' and not DELIMITED_SETTINGS[k] then
             captures[k] = true
         end
     end
     for k, v in next, tbl do
-        if type(k) == 'string' and type(v) == 'string' then
+        -- every string value is a pattern, except the nest setting
+        if type(k) == 'string' and type(v) == 'string' and k ~= 'nest' then
             local names = nil
             if k == 'open' or k == 'close' then
                 names = captures

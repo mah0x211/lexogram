@@ -1952,3 +1952,46 @@ function testcase.check_accepts_realistic_syntax()
         },
     }), {})
 end
+
+-- nest of delimited token tables
+
+-- a complete grammar with one delimited token table "block" whose nest is
+-- value
+local function nest_grammar(value)
+    return {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+            block = {
+                open = '"/*"',
+                close = '"*/"',
+                nest = value,
+            },
+        },
+        rules = {
+            chunk = '(name | block)*',
+        },
+    }
+end
+
+function testcase.check_accepts_nest_values()
+    assert.equal(check.check(nest_grammar('count')), {})
+    assert.equal(check.check(nest_grammar('error')), {})
+    assert.equal(check.check(nest_grammar(nil)), {})
+end
+
+function testcase.check_reports_invalid_nest_values()
+    assert.equal(check.check(nest_grammar('none')), {
+        err('invalid_value', 'tokens.block.nest',
+            'tokens.block.nest must be ' .. '"count" or "error", got "none"'),
+    })
+    assert.equal(check.check(nest_grammar(true)), {
+        err('invalid_type', 'tokens.block.nest',
+            'tokens.block.nest must be string, got boolean'),
+    })
+    assert.equal(check.check(nest_grammar({})), {
+        err('reserved_item', 'tokens.block.nest', 'tokens.block.nest: a ' ..
+                'table value is reserved for a future version'),
+    })
+end

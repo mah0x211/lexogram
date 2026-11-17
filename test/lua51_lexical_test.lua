@@ -31,21 +31,21 @@ local LIB_FILES = {
 }
 
 -- tokenize source completely, including skipped tokens; each token is
--- { kind name, text }, with true as a third element when unterminated
+-- { kind name, text }, with 'unterminated' as a third element when
+-- unterminated
 local function lex(source)
     load_grammar()
     local out = {}
     local pos = 1
     while true do
-        local kind, stop, unterminated =
-            lexogram.tokenize(COMPILED, source, pos)
+        local kind, stop, problem = lexogram.tokenize(COMPILED, source, pos)
         if not kind then
             return out
         end
         out[#out + 1] = {
             COMPILED.kinds[kind].name,
             source:sub(pos, stop - 1),
-            unterminated,
+            problem,
         }
         pos = stop
     end
@@ -316,7 +316,7 @@ function testcase.long_brackets()
         {
             'long_string',
             '[==[ open',
-            true,
+            'unterminated',
         },
     })
 end
