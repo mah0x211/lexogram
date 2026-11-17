@@ -28,29 +28,16 @@
 -- mark at the start of a file, and then a line that starts with "#", so
 -- that a script can start with a shebang line ("#!/usr/bin/env lua"); the
 -- parser itself rejects both, which "lexogram:lua52" follows. This grammar
--- adds them as the leading token shebang, which is skipped: a byte order
--- mark, a line that starts with "#", or a byte order mark and such a line
--- (two leading tokens cannot follow each other, so it is one token). It is
--- otherwise the same as lua52.
---
--- The token keeps the name shebang of lua51_shebang, although in Lua 5.2
--- it may be or begin with a byte order mark: the file loader removes a
--- byte order mark before it looks for the "#" line. For the operating
--- system, a byte order mark before "#!" makes the shebang line unusable;
--- Lua reads such a file all the same.
+-- embeds the mixin "lexogram:bom_shebang", which adds them as the leading
+-- token shebang, which is skipped: a byte order mark, a line that starts
+-- with "#", or a byte order mark and such a line. It is otherwise the same
+-- as lua52.
 return assert(require('lexogram.grammar')({
     extends = 'lexogram:lua52',
+    embeds = {
+        'lexogram:bom_shebang',
+    },
     lexogram = '2026.11.15.1',
     name = 'lua52_shebang',
     version = '1.0.0',
-    ['++tokens'] = {
-        -- the rest of the line, up to the newline as the loader reads it
-        shebang = [[ "\xEF\xBB\xBF" ("#" [^\n]*)? | "#" [^\n]* ]],
-    },
-    ['+leading'] = {
-        'shebang',
-    },
-    ['+skip'] = {
-        'shebang',
-    },
 }))

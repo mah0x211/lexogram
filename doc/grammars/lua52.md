@@ -10,18 +10,19 @@ local result = assert(lexogram.parse(compiled, 'goto done ::done::'))
 
 ## Metadata
 
-The fields `lexogram`, `name` and `version` tell which grammar a file is, and `extends` names the grammar it is a difference of.
+The fields `lexogram`, `name` and `version` tell which grammar a file is, `extends` names the grammar it is a difference of, and `embeds` the [mixin](../grammar.md#mixins) it embeds.
 
 | Field | `lua52` | `lua52_shebang` |
 |---|---|---|
 | `extends` | `'lexogram:lua51'` | `'lexogram:lua52'` |
+| `embeds` | — | `{ 'lexogram:bom_shebang' }` |
 | `lexogram` | `'2026.11.15.1'` | `'2026.11.15.1'` |
 | `name` | `'lua52'` | `'lua52_shebang'` |
 | `version` | `'1.0.0'` | `'1.0.0'` |
 | Built-in name | `lexogram:lua52` | `lexogram:lua52_shebang` |
 | Module | `lexogram.grammars.lua52` | `lexogram.grammars.lua52_shebang` |
 
-`lua52` accepts the syntax as the parser of Lua 5.2 does (`load`). `lua52_shebang` is `lua52` with a UTF-8 byte order mark and a first line that starts with `#` skipped, as the file loader of Lua 5.2 (`luaL_loadfilex`, `lua`, `luac`) reads files; it differs from `lua52` only in the `tokens`, `skip` and `leading` fields.
+`lua52` accepts the syntax as the parser of Lua 5.2 does (`load`). `lua52_shebang` is `lua52` with a UTF-8 byte order mark and a first line that starts with `#` skipped, as the file loader of Lua 5.2 (`luaL_loadfilex`, `lua`, `luac`) reads files; it differs from `lua52` only in the `tokens`, `skip` and `leading` fields, which the built-in mixin `lexogram:bom_shebang` (module `lexogram.grammars.bom_shebang`) adds: it extends `lexogram:shebang`, the mixin of `lua51_shebang`, and replaces its token.
 
 ## start
 

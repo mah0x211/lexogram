@@ -26,22 +26,15 @@
 --
 -- The file loader of Lua 5.1 (luaL_loadfile) skips such a line, so that a
 -- script can start with a shebang line ("#!/usr/bin/env lua"); the parser
--- itself rejects it, which "lexogram:lua51" follows. This grammar adds the
--- line as the leading token shebang, which is skipped, and is otherwise
--- the same as lua51.
+-- itself rejects it, which "lexogram:lua51" follows. This grammar embeds
+-- the mixin "lexogram:shebang", which adds the line as the leading token
+-- shebang, which is skipped, and is otherwise the same as lua51.
 return assert(require('lexogram.grammar')({
     extends = 'lexogram:lua51',
+    embeds = {
+        'lexogram:shebang',
+    },
     lexogram = '2026.11.15.1',
     name = 'lua51_shebang',
     version = '1.0.0',
-    ['++tokens'] = {
-        -- the rest of the line, up to the newline as the loader reads it
-        shebang = [[ "#" [^\n]* ]],
-    },
-    ['+leading'] = {
-        'shebang',
-    },
-    ['+skip'] = {
-        'shebang',
-    },
 }))
