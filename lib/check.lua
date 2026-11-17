@@ -27,7 +27,8 @@
 -- shapes), names (definitions and plain references), patterns (parsing,
 -- references, literals and usage warnings), lexical (the token automaton)
 -- and syntax (lookahead decisions); the last two run only when the earlier
--- passes found no error.
+-- passes found no error. mixin(def) checks the metadata of a mixin (see
+-- lexogram.extend), whose other fields are a difference table.
 local type = type
 local next = next
 local rawget = rawget
@@ -1465,6 +1466,25 @@ local PASSES = {
     check_syntax,
 }
 
+--- finish returns the diagnostics of ctx, sorted, in the public form.
+--- @param ctx table
+--- @return table[] diagnostics { severity, code, path, pos, message }
+local function finish(ctx)
+    local list = ctx.diagnostics
+    sort(list, diagnostic_less)
+    local out = {}
+    for i, d in ipairs(list) do
+        out[i] = {
+            severity = d.severity,
+            code = d.code,
+            path = path_string(d.segments),
+            pos = d.pos,
+            message = d.message,
+        }
+    end
+    return out
+end
+
 --- run checks grammar and returns its sorted diagnostics together with the
 --- results of the lexical and syntax passes, which lexogram.compile reuses
 --- instead of building them again. It never raises. It is internal to the
@@ -1484,19 +1504,7 @@ local function run(grammar)
         end
     end
 
-    local list = ctx.diagnostics
-    sort(list, diagnostic_less)
-    local out = {}
-    for i, d in ipairs(list) do
-        out[i] = {
-            severity = d.severity,
-            code = d.code,
-            path = path_string(d.segments),
-            pos = d.pos,
-            message = d.message,
-        }
-    end
-    return out, ctx.lexer, ctx.syntax
+    return finish(ctx), ctx.lexer, ctx.syntax
 end
 
 --- check checks grammar and returns its diagnostics, sorted. It never
@@ -1507,7 +1515,76 @@ local function check(grammar)
     return (run(grammar))
 end
 
+-- Metadata fields of a mixin; its other fields are a difference table,
+-- whose shape lexogram.extend checks.
+local MIXIN_FIELDS = {
+    {
+        name = 'lexogram',
+        type = 'string',
+        check = check_lexogram,
+    },
+    {
+        name = 'name',
+        type = 'string',
+        check = check_name,
+    },
+    {
+        name = 'version',
+        type = 'string',
+        check = check_grammar_version,
+    },
+    {
+        name = 'extends',
+        type = 'string',
+    },
+    {
+        name = 'mixin',
+        type = 'boolean',
+        check = function(ctx, segments, value)
+            if value ~= true then
+                add_error(ctx, 'invalid_value', segments,
+                          label(segments) .. ' must be true, got false')
+            end
+        end,
+    },
+}
+
+--- mixin checks the metadata fields of the mixin def (lexogram, name,
+--- version, extends and mixin; a mixin cannot have embeds) and returns the
+--- diagnostics, sorted. It never raises.
+--- @param def any
+--- @return table[] diagnostics { severity, code, path, pos, message }
+local function mixin(def)
+    local ctx = {
+        grammar = def,
+        diagnostics = {},
+    }
+    if expect_type(ctx, ROOT, def, 'table') then
+        check_required(ctx, ROOT, def, {
+            'lexogram',
+            'name',
+            'version',
+        })
+        for i = 1, #MIXIN_FIELDS do
+            local field = MIXIN_FIELDS[i]
+            local v = rawget(def, field.name)
+            local segs = child(ROOT, field.name)
+            if v ~= nil and expect_type(ctx, segs, v, field.type) and
+                field.check then
+                field.check(ctx, segs, v)
+            end
+        end
+        if rawget(def, 'embeds') ~= nil then
+            add_error(ctx, 'unknown_field', {
+                'embeds',
+            }, 'a mixin cannot embed mixins')
+        end
+    end
+    return finish(ctx)
+end
+
 return {
     check = check,
     run = run,
+    mixin = mixin,
 }

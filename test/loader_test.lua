@@ -687,3 +687,205 @@ function testcase.extends_reports_errors()
     assert.equal(err_of('bad_merge'),
                  EXTENDS .. 'bad_merge.lua: tokens.name: already exists')
 end
+
+-- mixins
+
+local MIXINS = ROOT .. 'test/fixtures/mixins/'
+
+-- the base grammar of the fixtures of mixins
+local function mixin_base()
+    return {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+            space = '[ \\n]+',
+        },
+        skip = {
+            'space',
+        },
+        rules = {
+            chunk = 'name*',
+        },
+    }
+end
+
+function testcase.embeds_applies_mixins_after_the_base()
+    local grammar, err, warnings = loader.load(MIXINS .. 'grammar.lua')
+
+    assert.is_nil(err)
+    assert.equal(warnings, {})
+    -- bom extends shebang: shebang adds the token, bom replaces it
+    local expected = mixin_base()
+    expected.name = 'grammar'
+    expected.version = '1.0.0'
+    expected.tokens.shebang = '"\\xEF\\xBB\\xBF" ("#" [^\\n]*)? | "#" [^\\n]*'
+    expected.leading = {
+        'shebang',
+    }
+    expected.skip[2] = 'shebang'
+    assert.equal(grammar, expected)
+    -- the merged grammar compiles
+    local compiled, diagnostics = require('lexogram').compile(grammar)
+    assert.is_table(compiled)
+    assert.equal(diagnostics, {})
+
+    -- a mixin extends a mixin named from its own file
+    grammar = assert(loader.load(MIXINS .. 'deep.lua'))
+    assert.equal(grammar.rules, {
+        chunk = 'other*',
+        other = 'name',
+    })
+end
+
+function testcase.embeds_skips_what_exists_with_warnings()
+    local grammar, err, warnings = loader.load(MIXINS .. 'warn.lua')
+
+    assert.is_nil(err)
+    -- space adds what the base has; hash replaces what shebang added
+    local expected = mixin_base()
+    expected.name = 'warn'
+    expected.version = '1.0.0'
+    expected.tokens.shebang = '"#!" [^\\n]*'
+    expected.leading = {
+        'shebang',
+    }
+    expected.skip[2] = 'shebang'
+    assert.equal(grammar, expected)
+    assert.equal(warnings, {
+        {
+            severity = 'warning',
+            code = 'already_defined',
+            path = 'skip',
+            message = 'skip already has "space"; it is not added',
+            source = MIXINS .. 'space.lua',
+        },
+        {
+            severity = 'warning',
+            code = 'already_defined',
+            path = 'tokens.space',
+            message = 'tokens.space already exists; it is not added',
+            source = MIXINS .. 'space.lua',
+        },
+    })
+    -- the warnings of a grammar that is extended are returned too
+    local _
+    _, err, warnings = loader.load(MIXINS .. 'nested.lua')
+    assert.is_nil(err)
+    assert.equal(#warnings, 2)
+end
+
+function testcase.embeds_applies_the_difference_of_the_grammar_last()
+    local grammar = assert(loader.load(MIXINS .. 'own.lua'))
+    assert.equal(grammar.tokens.shebang, '"#!" [^\\n]*')
+    assert.equal(grammar.skip, {
+        'space',
+    })
+    -- the difference of the grammar itself is as strict as for extends
+    local _, err = loader.load(MIXINS .. 'own_adds.lua')
+    assert.equal(err, MIXINS .. 'own_adds.lua: leading: already has "shebang"')
+end
+
+function testcase.embeds_reports_errors()
+    local function err_of(name)
+        local grammar, err = loader.load(MIXINS .. name .. '.lua')
+        assert.is_nil(grammar)
+        assert.is_string(err)
+        return err
+    end
+
+    assert.equal(err_of('twice'),
+                 MIXINS .. 'twice.lua: cannot embed "' .. MIXINS ..
+                     'shebang.lua": it is already embedded through "' .. MIXINS ..
+                     'bom.lua"')
+    assert.equal(err_of('not_mixin'), MIXINS ..
+                     'not_mixin.lua: cannot embed "base": it is not a mixin')
+    assert.equal(err_of('extends_mixin'),
+                 MIXINS .. 'extends_mixin.lua: cannot extend "shebang": it is' ..
+                     ' a mixin (embed it with embeds)')
+    assert.equal(err_of('no_extends'),
+                 MIXINS .. 'no_extends.lua: embeds needs extends')
+    assert.equal(err_of('bad_embeds'),
+                 MIXINS .. 'bad_embeds.lua: embeds must' ..
+                     ' be a non-empty array of names')
+    assert.equal(err_of('bad_embeds_name'), MIXINS .. 'bad_embeds_name.lua:' ..
+                     ' invalid embeds name: "../shebang"')
+    assert.match(err_of('missing'),
+                 MIXINS .. 'missing.lua: cannot embed "nothing": ', true)
+    assert.match(err_of('embed_cycle'),
+                 MIXINS .. 'cycle_b.lua: circular extends: ' .. MIXINS ..
+                     'embed_cycle.lua -> ' .. MIXINS .. 'cycle_a.lua -> ' ..
+                     MIXINS .. 'cycle_b.lua -> ' .. MIXINS .. 'cycle_a.lua',
+                 true)
+    -- an error of a mixin names the mixin
+    assert.equal(err_of('mixin_error'),
+                 MIXINS .. 'mixin_error.lua: ' .. MIXINS ..
+                     'removes.lua: rules.none: does not exist')
+    assert.equal(err_of('imports_mixin'), MIXINS .. 'imports_mixin.lua:1:' ..
+                     ' cannot import "shebang": it is a mixin')
+end
+
+function testcase.mixins_are_checked_and_not_loaded_as_grammars()
+    local function err_of(name)
+        local grammar, err = loader.load(MIXINS .. name .. '.lua')
+        assert.is_nil(grammar)
+        assert.is_string(err)
+        return err
+    end
+
+    assert.equal(err_of('shebang'), MIXINS .. 'shebang.lua: a mixin is not a' ..
+                     ' grammar (embed it with embeds)')
+    assert.equal(err_of('bad_mixin'),
+                 MIXINS .. 'bad_mixin.lua: name: required' ..
+                     ' field name is missing\n' .. MIXINS ..
+                     'bad_mixin.lua: version: version must be MAJOR.MINOR.PATCH,' ..
+                     ' got "1"')
+    assert.equal(err_of('bad_shape'), MIXINS .. 'bad_shape.lua: +skip: the' ..
+                     ' value must be an array of items')
+    assert.equal(err_of('mixin_extends_grammar'),
+                 MIXINS .. 'mixin_extends_grammar.lua: cannot extend "base":' ..
+                     ' it is not a mixin')
+end
+
+function testcase.embeds_reads_built_in_mixins()
+    local new = require('lexogram.grammar')
+    package.preload['lexogram.grammars.mini_shebang'] = function()
+        return assert(new({
+            mixin = true,
+            lexogram = '2026.11.15.1',
+            name = 'mini_shebang',
+            version = '1.0.0',
+            ['++tokens'] = {
+                shebang = '"#" [^\\n]*',
+            },
+            ['+leading'] = {
+                'shebang',
+            },
+            ['+skip'] = {
+                'shebang',
+            },
+        }))
+    end
+    with_mini(function()
+        local grammar, err, warnings = loader.load(MIXINS .. 'from_builtin.lua')
+        assert.is_nil(err)
+        assert.equal(warnings, {})
+        local expected = mini()
+        expected.name = 'from_builtin'
+        expected.tokens.shebang = '"#" [^\\n]*'
+        expected.leading = {
+            'shebang',
+        }
+        expected.skip = {
+            'shebang',
+        }
+        assert.equal(grammar, expected)
+        -- a built-in mixin is no grammar either
+        grammar, err = loader.load('lexogram:mini_shebang')
+        assert.is_nil(grammar)
+        assert.equal(err, 'lexogram:mini_shebang: a mixin is not a grammar' ..
+                         ' (embed it with embeds)')
+    end)
+    package.preload['lexogram.grammars.mini_shebang'] = nil
+    package.loaded['lexogram.grammars.mini_shebang'] = nil
+end

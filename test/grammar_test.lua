@@ -47,7 +47,7 @@ function testcase.new_returns_a_function_of_new_copies()
     local fn, err, diagnostics = grammar(def)
 
     assert.is_nil(err)
-    assert.is_nil(diagnostics)
+    assert.equal(diagnostics, {})
     assert.is_function(fn)
     local a = fn()
     assert.equal(a, base())
@@ -101,12 +101,15 @@ function testcase.new_reports_errors_of_the_check()
     fn, err = grammar(def)
     assert.is_nil(fn)
     assert.equal(select(2, err:gsub('\n', '')) + 1, 2)
-    -- warnings are no errors
+    -- warnings are no errors, and are returned with the function
     def = base()
-    def.tokens.unused = 'DIGIT+'
-    fn, err = grammar(def)
+    def.rules.unused = 'name'
+    fn, err, diagnostics = grammar(def)
     assert.is_function(fn)
     assert.is_nil(err)
+    assert.equal(#diagnostics, 1)
+    assert.equal(diagnostics[1].severity, 'warning')
+    assert.equal(diagnostics[1].code, 'unreachable_rule')
 end
 
 function testcase.new_reports_errors_of_extends()
@@ -163,4 +166,275 @@ function testcase.builtin_reports_modules_of_other_shapes()
     package.preload['lexogram.grammars.broken'] = nil
     assert.is_nil(g)
     assert.equal(err, 'broken module')
+end
+
+function testcase.built_in_grammars_have_no_warnings()
+    -- the built-in grammars are the modules installed by the rockspec; the
+    -- test runner executes a test file with its own directory as the
+    -- working directory
+    local f = assert(io.open('../rockspecs/lexogram-scm-1.rockspec'))
+    local spec = f:read('*a')
+    f:close()
+    local modules = {}
+    for module in spec:gmatch('"(lexogram%.grammars%.[%w_]+)"') do
+        modules[#modules + 1] = module
+    end
+    assert(#modules > 0)
+
+    -- record what lexogram.grammar returns while the modules are loaded
+    -- again; the check runs without the coverage hook, under which it takes
+    -- far too long
+    local returned = {}
+    local loaded = {}
+    package.loaded['lexogram.grammar'] = setmetatable({
+        new = grammar.new,
+        builtin = grammar.builtin,
+    }, {
+        __call = function(_, def)
+            local fn, err, diagnostics = grammar(def)
+            returned[#returned + 1] = {
+                def.name,
+                diagnostics,
+            }
+            return fn, err, diagnostics
+        end,
+    })
+    for _, module in ipairs(modules) do
+        loaded[module] = package.loaded[module]
+        package.loaded[module] = nil
+    end
+    local hook, mask, count = debug.gethook()
+    debug.sethook()
+    local ok, err = pcall(function()
+        for _, module in ipairs(modules) do
+            require(module)
+        end
+    end)
+    if hook then
+        debug.sethook(hook, mask, count)
+    end
+    package.loaded['lexogram.grammar'] = grammar
+    for _, module in ipairs(modules) do
+        package.loaded[module] = loaded[module]
+    end
+    assert(ok, err)
+
+    assert.equal(#returned, #modules)
+    for _, r in ipairs(returned) do
+        assert.equal(r, {
+            r[1],
+            {},
+        })
+    end
+end
+
+-- mixins
+
+-- a mixin that adds a number token
+local function number_mixin()
+    return {
+        mixin = true,
+        lexogram = '2026.11.15.1',
+        name = 'number',
+        version = '1.0.0',
+        ['++tokens'] = {
+            number = 'DIGIT+',
+        },
+        rules = {
+            ['=chunk'] = '(name | number)*',
+        },
+    }
+end
+
+-- a mixin that extends the mixin number
+local function hex_mixin()
+    return {
+        mixin = true,
+        extends = 'lexogram:number',
+        lexogram = '2026.11.15.1',
+        name = 'hex',
+        version = '1.0.0',
+        tokens = {
+            ['=number'] = '"0x" HEXDIGIT+ | DIGIT+',
+        },
+    }
+end
+
+-- define base, number and hex as built-in modules and run fn
+local function with_mixins(fn)
+    with_module('base', builtin_base, function()
+        with_module('number', assert(grammar(number_mixin())), function()
+            with_module('hex', assert(grammar(hex_mixin())), fn)
+        end)
+    end)
+end
+
+function testcase.new_defines_a_mixin()
+    with_module('number', assert(grammar(number_mixin())), function()
+        local fn, err, diagnostics = grammar(hex_mixin())
+
+        assert.is_nil(err)
+        assert.equal(diagnostics, {})
+        -- a new copy of the mixin as written
+        assert.equal(fn(), hex_mixin())
+        assert.not_rawequal(fn(), fn())
+        assert.equal(debug.getinfo(fn, 'S').source, '=lexogram.grammar:hex')
+        -- the chain of a built-in mixin
+        local chain, _, kind = grammar.builtin_value('number')
+        assert.equal(kind, 'mixin')
+        assert.equal(chain, {
+            {
+                source = 'lexogram:number',
+                diff = number_mixin(),
+            },
+        })
+    end)
+end
+
+function testcase.new_reports_errors_of_a_mixin()
+    local function err_of(def)
+        local fn, err, diagnostics = grammar(def)
+        assert.is_nil(fn)
+        return err, diagnostics
+    end
+
+    -- the metadata
+    local def = number_mixin()
+    def.name, def.mixin, def.embeds = nil, false, {
+        'lexogram:x',
+    }
+    local err, diagnostics = err_of(def)
+    assert.equal(err, 'name: required field name is missing\n' ..
+                     'embeds: a mixin cannot embed mixins\n' ..
+                     'mixin: mixin must be true, got false')
+    assert.equal(#diagnostics, 3)
+    -- the shape of the difference
+    def = number_mixin()
+    def['+skip'] = 'number'
+    assert.equal(err_of(def), '+skip: the value must be an array of items')
+    -- the mixin it extends
+    def = hex_mixin()
+    def.extends = 'number'
+    assert.equal(err_of(def), 'extends must name a built-in mixin' ..
+                     ' ("lexogram:<name>"), got number')
+    def.extends = 'lexogram:none_such'
+    assert.match(err_of(def),
+                 'cannot extend "lexogram:none_such": no built-in' ..
+                     ' grammar named "none_such"', true)
+    with_module('base', builtin_base, function()
+        def.extends = 'lexogram:base'
+        assert.equal(err_of(def),
+                     'cannot extend "lexogram:base": it is not a mixin')
+    end)
+    -- a value that has no source text
+    def = number_mixin()
+    def['=start'] = print
+    assert.match(err_of(def), 'start', true)
+end
+
+function testcase.new_embeds_built_in_mixins()
+    with_mixins(function()
+        local fn, err, diagnostics = grammar({
+            extends = 'lexogram:base',
+            embeds = {
+                'lexogram:hex',
+            },
+            name = 'derived',
+            version = '1.0.0',
+            ['++rules'] = {
+                unused = 'name',
+            },
+        })
+
+        assert.is_nil(err)
+        local expected = base()
+        expected.name = 'derived'
+        expected.tokens.number = '"0x" HEXDIGIT+ | DIGIT+'
+        expected.rules.chunk = '(name | number)*'
+        expected.rules.unused = 'name'
+        assert.equal(fn(), expected)
+        assert.equal(#diagnostics, 1)
+        assert.equal(diagnostics[1].code, 'unreachable_rule')
+
+        -- the warnings of the mixins come before those of the check
+        with_module('numbers', function()
+            local g = base()
+            g.name = 'numbers'
+            g.tokens.number = 'DIGIT+'
+            return g
+        end, function()
+            fn, err, diagnostics = grammar({
+                extends = 'lexogram:numbers',
+                embeds = {
+                    'lexogram:number',
+                },
+                name = 'derived',
+                version = '1.0.0',
+                ['++rules'] = {
+                    unused = 'name',
+                },
+            })
+        end)
+        assert.is_nil(err)
+        assert.is_function(fn)
+        assert.equal(diagnostics[1], {
+            severity = 'warning',
+            code = 'already_defined',
+            path = 'tokens.number',
+            message = 'tokens.number already exists; it is not added',
+            source = 'lexogram:number',
+        })
+        assert.equal(diagnostics[2].code, 'unreachable_rule')
+        assert.equal(#diagnostics, 2)
+    end)
+end
+
+function testcase.new_reports_errors_of_embeds()
+    local function err_of(def)
+        local fn, err = grammar(def)
+        assert.is_nil(fn)
+        return err
+    end
+
+    with_mixins(function()
+        local def = base()
+        def.embeds = {
+            'lexogram:number',
+        }
+        assert.equal(err_of(def), 'embeds needs extends')
+        def = {
+            extends = 'lexogram:base',
+            name = 'derived',
+            version = '1.0.0',
+        }
+        def.embeds = 'lexogram:number'
+        assert.equal(err_of(def), 'embeds must be a non-empty array of names')
+        def.embeds = {
+            'number',
+        }
+        assert.equal(err_of(def), 'embeds must name built-in mixins' ..
+                         ' ("lexogram:<name>"), got number')
+        def.embeds = {
+            'lexogram:base',
+        }
+        assert.equal(err_of(def),
+                     'cannot embed "lexogram:base": it is not a mixin')
+        def.embeds = {
+            'lexogram:none_such',
+        }
+        assert.match(err_of(def), 'cannot embed "lexogram:none_such": no' ..
+                         ' built-in grammar named "none_such"', true)
+        def.embeds = {
+            'lexogram:number',
+            'lexogram:hex',
+        }
+        assert.equal(err_of(def), 'cannot embed "lexogram:number": it is' ..
+                         ' already embedded through "lexogram:hex"')
+        assert.equal(err_of({
+            extends = 'lexogram:number',
+            name = 'derived',
+            version = '1.0.0',
+        }), 'cannot extend "lexogram:number": it is a mixin' ..
+                         ' (embed it with embeds)')
+    end)
 end

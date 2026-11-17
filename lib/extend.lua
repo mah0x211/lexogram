@@ -38,8 +38,17 @@
 -- empty tables when the base has none. An item or field to add must not
 -- exist, and one to remove or replace must. In each table, removals are
 -- applied first, then replacements and entered tables, then additions.
--- At the top level, extends, lexogram, name and version are written
--- without a mark; name and version are not inherited.
+-- At the top level, extends, embeds, mixin, lexogram, name and version are
+-- written without a mark; name and version are not inherited.
+--
+-- A mixin (mixin = true) is a difference table without a base, which
+-- grammars embed (embeds = { names }). The mixins are applied after the
+-- base and before the difference of the grammar itself, in the order they
+-- are written; a mixin that extends another mixin is applied after it.
+-- Since a mixin is written without knowing the base it is embedded in, an
+-- item or field that it adds and that already exists is not added, with a
+-- warning; a replacement replaces what an earlier mixin wrote (the later
+-- one wins). The other marks work as in a difference of extends.
 local type = type
 local next = next
 local ipairs = ipairs
@@ -69,9 +78,18 @@ local VALUE_FIELDS = {
 }
 
 -- Fields that tell about the file itself: written without a mark, and
--- name and version are not inherited.
+-- name and version are not inherited. Of these, the grammar takes
+-- lexogram, name and version from the difference of the grammar itself
+-- (COPIED), and none from a mixin.
 local OWN_FIELDS = {
     extends = true,
+    embeds = true,
+    mixin = true,
+    lexogram = true,
+    name = true,
+    version = true,
+}
+local COPIED = {
     lexogram = true,
     name = true,
     version = true,
@@ -178,9 +196,58 @@ end
 
 local apply
 
--- Operations by mark: op(t, name, value, path, root) applies the operation
--- to the table t (the table that holds name) and returns nil, or an error
--- message.
+-- Shapes by mark: shape(name, value, path) returns nil if value has the
+-- shape that the mark takes, or an error message.
+local SHAPES = {
+    ['+'] = function(_, value, path)
+        if not (type(value) == 'table' and array_length(value)) then
+            return '+' .. path .. ': the value must be an array of items'
+        end
+    end,
+    ['-'] = function(_, value, path)
+        if not (type(value) == 'table' and array_length(value)) then
+            return '-' .. path .. ': the value must be an array of items'
+        end
+    end,
+    ['++'] = function(_, value, path)
+        if type(value) ~= 'table' then
+            return '++' .. path .. ': the value must be a table of fields'
+        end
+        for k in next, value do
+            if type(k) ~= 'string' then
+                return '++' .. path .. ': the value must be a table of fields'
+            end
+        end
+    end,
+    ['--'] = function(_, value, path)
+        local n = type(value) == 'table' and array_length(value)
+        if n then
+            for i = 1, n do
+                if type(rawget(value, i)) ~= 'string' then
+                    n = nil
+                    break
+                end
+            end
+        end
+        if not n then
+            return '--' .. path .. ': the value must be an array of names'
+        end
+    end,
+    ['='] = function()
+    end,
+    [''] = function(name, value, path)
+        if type(value) ~= 'table' then
+            return path .. ': a value without a mark must be a table' ..
+                       ' (write =' .. name .. ' to replace the value)'
+        end
+    end,
+}
+
+-- Operations by mark: op(t, name, value, path, root, mixin) applies the
+-- operation to the table t (the table that holds name), whose value has
+-- the shape of the mark, and returns nil, or an error message. mixin is
+-- the state of the mixin being applied, or nil for a difference of
+-- extends.
 
 --- target returns the value of name in t, creating an empty table for a
 --- top-level table field that the base does not have, or nil and an error
@@ -205,34 +272,46 @@ local function target(t, name, path, root)
     return v
 end
 
+--- warn adds the warning that the mixin did not add what already exists
+--- at path.
+--- @param mixin table { source, warnings }
+--- @param path string
+--- @param message string
+local function warn(mixin, path, message)
+    local list = mixin.warnings
+    list[#list + 1] = {
+        severity = 'warning',
+        code = 'already_defined',
+        path = path,
+        message = message,
+        source = mixin.source,
+    }
+end
+
 local OPERATIONS = {
-    ['+'] = function(t, name, value, path, root)
-        local n = type(value) == 'table' and array_length(value)
-        if not n then
-            return '+' .. path .. ': the value must be an array of items'
-        end
+    ['+'] = function(t, name, value, path, root, mixin)
         local list, err = target(t, name, path, root)
         if not list then
             return err
         end
-        for i = 1, n do
+        for i = 1, array_length(value) do
             local item = rawget(value, i)
-            if index_of(list, item) then
+            if not index_of(list, item) then
+                list[#list + 1] = copy(item, {})
+            elseif mixin then
+                warn(mixin, path, path .. ' already has ' .. quote(item) ..
+                         '; it is not added')
+            else
                 return path .. ': already has ' .. quote(item)
             end
-            list[#list + 1] = copy(item, {})
         end
     end,
     ['-'] = function(t, name, value, path, root)
-        local n = type(value) == 'table' and array_length(value)
-        if not n then
-            return '-' .. path .. ': the value must be an array of items'
-        end
         local list, err = target(t, name, path, root)
         if not list then
             return err
         end
-        for i = 1, n do
+        for i = 1, array_length(value) do
             local item = rawget(value, i)
             local at = index_of(list, item)
             if not at then
@@ -246,15 +325,7 @@ local OPERATIONS = {
             end
         end
     end,
-    ['++'] = function(t, name, value, path, root)
-        if type(value) ~= 'table' then
-            return '++' .. path .. ': the value must be a table of fields'
-        end
-        for k in next, value do
-            if type(k) ~= 'string' then
-                return '++' .. path .. ': the value must be a table of fields'
-            end
-        end
+    ['++'] = function(t, name, value, path, root, mixin)
         local tbl, err = target(t, name, path, root)
         if not tbl then
             return err
@@ -265,30 +336,22 @@ local OPERATIONS = {
         end
         sort(keys, byte_less)
         for _, k in ipairs(keys) do
-            if rawget(tbl, k) ~= nil then
-                return child(path, k) .. ': already exists'
+            local at = child(path, k)
+            if rawget(tbl, k) == nil then
+                tbl[k] = copy(rawget(value, k), {})
+            elseif mixin then
+                warn(mixin, at, at .. ' already exists; it is not added')
+            else
+                return at .. ': already exists'
             end
-            tbl[k] = copy(rawget(value, k), {})
         end
     end,
     ['--'] = function(t, name, value, path, root)
-        local n = type(value) == 'table' and array_length(value)
-        if n then
-            for i = 1, n do
-                if type(rawget(value, i)) ~= 'string' then
-                    n = nil
-                    break
-                end
-            end
-        end
-        if not n then
-            return '--' .. path .. ': the value must be an array of names'
-        end
         local tbl, err = target(t, name, path, root)
         if not tbl then
             return err
         end
-        for i = 1, n do
+        for i = 1, array_length(value) do
             local k = rawget(value, i)
             if rawget(tbl, k) == nil then
                 return child(path, k) .. ': does not exist'
@@ -302,42 +365,39 @@ local OPERATIONS = {
         end
         t[name] = copy(value, {})
     end,
-    [''] = function(t, name, value, path, root)
-        if type(value) ~= 'table' then
-            return path .. ': a value without a mark must be a table' ..
-                       ' (write =' .. name .. ' to replace the value)'
-        end
+    [''] = function(t, name, value, path, root, mixin)
         local tbl, err = target(t, name, path, root)
         if not tbl then
             return err
         end
-        return apply(tbl, value, path, false)
+        return apply(tbl, value, path, false, mixin)
     end,
 }
 
---- apply applies the difference table diff to the table t at path and
---- returns nil, or an error message.
---- @param t table
+--- operations returns the operations of the difference table diff at path
+--- in the order they are applied, or nil and an error message. At the top
+--- level (root), diff must not hold the fields of OWN_FIELDS.
 --- @param diff table
 --- @param path string
---- @param root boolean t is the grammar itself
+--- @param root boolean
+--- @return table[]? ops { mark, name, value }
 --- @return string? err
-function apply(t, diff, path, root)
+local function operations(diff, path, root)
     local ops = {}
     local marks = {}
     for k, v in next, diff do
         local mark, name = parse_key(k)
         if not mark then
-            return (path == '' and '' or path .. ': ') .. name
+            return nil, (path == '' and '' or path .. ': ') .. name
         end
         if root and not (TABLE_FIELDS[name] or VALUE_FIELDS[name]) then
-            return k .. ': unknown field'
+            return nil, k .. ': unknown field'
         end
         local seen = marks[name] or {}
         marks[name] = seen
         seen[mark] = true
         if seen['='] and seen[''] then
-            return child(path, name) .. ': =' .. name .. ' and ' .. name ..
+            return nil, child(path, name) .. ': =' .. name .. ' and ' .. name ..
                        ' cannot be used together'
         end
         ops[#ops + 1] = {
@@ -356,9 +416,26 @@ function apply(t, diff, path, root)
         end
         return byte_less(a.mark, b.mark)
     end)
+    return ops
+end
+
+--- apply applies the difference table diff to the table t at path and
+--- returns nil, or an error message.
+--- @param t table
+--- @param diff table
+--- @param path string
+--- @param root boolean t is the grammar itself
+--- @param mixin table? { source, warnings } of the mixin being applied
+--- @return string? err
+function apply(t, diff, path, root, mixin)
+    local ops, err = operations(diff, path, root)
+    if not ops then
+        return err
+    end
     for _, op in ipairs(ops) do
-        local err = OPERATIONS[op.mark](t, op.name, op.value,
-                                        child(path, op.name), root)
+        local at = child(path, op.name)
+        err = SHAPES[op.mark](op.name, op.value, at) or
+                  OPERATIONS[op.mark](t, op.name, op.value, at, root, mixin)
         if err then
             return err
         end
@@ -366,32 +443,154 @@ function apply(t, diff, path, root)
     return nil
 end
 
---- extend returns a copy of the grammar base with the difference table diff
---- applied, or nil and an error message. diff.extends is not applied,
---- diff.lexogram (without a mark) replaces the version of the base, and the
---- result has the name and version of diff only.
---- @param base table
+--- validate_table checks the shapes of the difference table diff at path
+--- without applying it, and returns nil, or an error message.
 --- @param diff table
---- @return table? grammar
+--- @param path string
+--- @param root boolean
 --- @return string? err
-local function extend(base, diff)
-    local grammar = copy(base, {})
-    grammar.name, grammar.version = nil, nil
+local function validate_table(diff, path, root)
+    local ops, err = operations(diff, path, root)
+    if not ops then
+        return err
+    end
+    for _, op in ipairs(ops) do
+        local at = child(path, op.name)
+        err = SHAPES[op.mark](op.name, op.value, at)
+        if not err and op.mark == '' then
+            err = validate_table(op.value, at, false)
+        end
+        if err then
+            return err
+        end
+    end
+    return nil
+end
+
+--- difference returns the fields of the difference table diff other than
+--- those of OWN_FIELDS.
+--- @param diff table
+--- @return table
+local function difference(diff)
     local rest = {}
     for k, v in next, diff do
         if not OWN_FIELDS[k] then
             rest[k] = v
-        elseif k ~= 'extends' then
+        end
+    end
+    return rest
+end
+
+--- validate checks the shape of the difference table diff of a mixin (the
+--- marks of its keys, the top-level field names and the shape of each
+--- value) without a base, and returns nil, or an error message. Whether
+--- the targets exist is known only when the mixin is embedded.
+--- @param diff table
+--- @return string? err
+local function validate(diff)
+    return validate_table(difference(diff), '', true)
+end
+
+--- embeds returns the names of the embeds field of the difference table
+--- diff, or nil and an error message if it is not a non-empty array.
+--- @param diff table
+--- @return any[]? names
+--- @return string? err
+local function embeds(diff)
+    local v = rawget(diff, 'embeds')
+    local n = type(v) == 'table' and array_length(v)
+    if not n or n == 0 then
+        return nil, 'embeds must be a non-empty array of names'
+    end
+    local names = {}
+    for i = 1, n do
+        names[i] = rawget(v, i)
+    end
+    return names
+end
+
+--- check_duplicates returns an error message if a mixin is in two of the
+--- chains of mixins, or nil.
+--- @param mixins table[][] chains of { source, diff }
+--- @return string? err
+local function check_duplicates(mixins)
+    -- source of a mixin -> source of the embedded mixin whose chain has it
+    local seen = {}
+    for _, chain in ipairs(mixins) do
+        local entry = chain[#chain].source
+        for _, link in ipairs(chain) do
+            local source = link.source
+            local prev = seen[source]
+            if prev == entry then
+                return 'cannot embed ' .. quote(entry) .. ' twice'
+            elseif prev and source == entry then
+                return 'cannot embed ' .. quote(source) ..
+                           ': it is already embedded through ' .. quote(prev)
+            elseif prev and source == prev then
+                return 'cannot embed ' .. quote(source) ..
+                           ': it is already embedded through ' .. quote(entry)
+            elseif prev then
+                return 'cannot embed ' .. quote(source) .. ' twice: through ' ..
+                           quote(prev) .. ' and ' .. quote(entry)
+            end
+        end
+        for _, link in ipairs(chain) do
+            seen[link.source] = entry
+        end
+    end
+    return nil
+end
+
+--- extend returns a copy of the grammar base with the mixins and then the
+--- difference table diff applied, the warnings of the mixins, or nil and
+--- an error message. Each item of mixins is the chain of a mixin of embeds,
+--- an array of { source = name, diff = difference table } from the mixin
+--- that extends no other one; the error message of a mixin starts with its
+--- source. Of the fields of OWN_FIELDS, only diff.lexogram (which replaces
+--- the version of the base), diff.name and diff.version are taken: the
+--- result has the name and version of diff only.
+--- @param base table
+--- @param diff table
+--- @param mixins table[][]?
+--- @return table? grammar
+--- @return string? err
+--- @return table[]? warnings { severity, code, path, message, source }
+local function extend(base, diff, mixins)
+    local grammar = copy(base, {})
+    grammar.name, grammar.version = nil, nil
+    local warnings = {}
+    if mixins then
+        local err = check_duplicates(mixins)
+        if err then
+            return nil, err
+        end
+        for _, chain in ipairs(mixins) do
+            for _, link in ipairs(chain) do
+                err = apply(grammar, difference(link.diff), '', true, {
+                    source = link.source,
+                    warnings = warnings,
+                })
+                if err then
+                    return nil, link.source .. ': ' .. err
+                end
+            end
+        end
+    end
+    for k in next, COPIED do
+        local v = rawget(diff, k)
+        if v ~= nil then
             grammar[k] = copy(v, {})
         end
     end
-    local err = apply(grammar, rest, '', true)
+    local err = apply(grammar, difference(diff), '', true)
     if err then
         return nil, err
     end
-    return grammar
+    return grammar, nil, warnings
 end
 
 return {
     extend = extend,
+    validate = validate,
+    embeds = embeds,
 }

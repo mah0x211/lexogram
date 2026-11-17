@@ -32,8 +32,12 @@
 -- ^[A-Za-z0-9_-]+$, so a name cannot go up, be absolute or hold a drive),
 -- and "lexogram:name" is the built-in grammar of the module
 -- lexogram.grammars.name, read with require (see lexogram.grammar). A
--- grammar whose table has extends is merged into a copy of that grammar by
--- lexogram.extend after the file has run.
+-- grammar whose table has extends is merged into a copy of that grammar,
+-- and of the mixins it embeds (embeds), by lexogram.extend after the file
+-- has run. A file whose table has mixin is a mixin: its metadata and the
+-- shape of its difference are checked, and the mixin it extends is
+-- resolved, but it is not a grammar: it can be embedded only, and neither
+-- loaded nor imported nor extended by a grammar.
 local type = type
 local error = error
 local pcall = pcall
@@ -44,6 +48,7 @@ local tostring = tostring
 local setmetatable = setmetatable
 local open = io.open
 local find = string.find
+local gsub = string.gsub
 local match = string.match
 local gmatch = string.gmatch
 local byte = string.byte
@@ -51,8 +56,10 @@ local rawget = rawget
 local concat = table.concat
 local getinfo = debug.getinfo
 local load_text = require('lexogram.compat').load_text
-local extend = require('lexogram.extend').extend
-local builtin = require('lexogram.grammar').builtin
+local extend = require('lexogram.extend')
+local grammar_module = require('lexogram.grammar')
+local builtin_value = grammar_module.builtin_value
+local check_mixin = grammar_module.check_mixin
 
 -- Pattern of a part of a grammar name.
 local PART = '[A-Za-z0-9_-]+'
@@ -179,34 +186,40 @@ local function resolve(pathname, name)
     return nil
 end
 
---- get_grammar returns a copy of the grammar at resolved, loading it once
---- per top-level load, or nil and an error message (circular is the word
---- used in the message about a cycle).
+--- get_value returns a copy of the grammar at resolved and "grammar", or
+--- the chain of the mixin at resolved (an array of { source, diff }, see
+--- lexogram.extend) and "mixin", loading it once per top-level load; or
+--- nil and an error message (circular is the word used in the message
+--- about a cycle).
 --- @param state table
 --- @param resolved string
 --- @param circular string
---- @return table? grammar
+--- @return table? value
 --- @return string? err
-local function get_grammar(state, resolved, circular)
+--- @return string? kind "grammar" or "mixin"
+local function get_value(state, resolved, circular)
     local name = match(resolved, '^lexogram:(.*)$')
     if name then
         -- a new copy on each call (a built-in grammar extends no grammar)
-        return builtin(name)
+        return builtin_value(name)
     elseif state.active[resolved] then
         return nil,
                'circular ' .. circular .. ': ' .. concat(state.stack, ' -> ') ..
                    ' -> ' .. resolved
     end
-    local tbl = state.cache[resolved]
-    if not tbl then
-        local err
-        tbl, err = load_file(state, resolved)
-        if not tbl then
+    local entry = state.cache[resolved]
+    if not entry then
+        local value, err, kind = load_file(state, resolved)
+        if not value then
             return nil, err
         end
-        state.cache[resolved] = tbl
+        entry = {
+            value = value,
+            kind = kind,
+        }
+        state.cache[resolved] = entry
     end
-    return deep_copy(tbl, {})
+    return deep_copy(entry.value, {}), nil, entry.kind
 end
 
 --- new_import returns the import function for the file at pathname.
@@ -220,7 +233,7 @@ local function new_import(state, pathname)
             raise_import_error(pathname,
                                'invalid import name: ' .. describe_name(name))
         end
-        local tbl, err = get_grammar(state, resolved, 'import')
+        local tbl, err, kind = get_value(state, resolved, 'import')
         if not tbl then
             if state.active[resolved] then
                 raise_import_error(pathname, err)
@@ -228,13 +241,47 @@ local function new_import(state, pathname)
             raise_import_error(pathname,
                                'cannot import ' .. describe_name(name) .. ': ' ..
                                    err)
+        elseif kind ~= 'grammar' then
+            raise_import_error(pathname,
+                               'cannot import ' .. describe_name(name) ..
+                                   ': it is a mixin')
         end
         return tbl
     end
 end
 
+--- get_named returns the value and the kind of the grammar or mixin name
+--- written in the field field (extends or embeds) of the file at pathname,
+--- or nil and an error message that starts with pathname.
+--- @param state table
+--- @param pathname string
+--- @param name any
+--- @param field string
+--- @return table? value
+--- @return string? err
+--- @return string? kind
+local function get_named(state, pathname, name, field)
+    local resolved = resolve(pathname, name)
+    if not resolved then
+        return nil, pathname .. ': invalid ' .. field .. ' name: ' ..
+                   describe_name(name)
+    end
+    local value, err, kind = get_value(state, resolved, field)
+    if not value then
+        if state.active[resolved] then
+            return nil, pathname .. ': ' .. err
+        end
+        return nil,
+               pathname .. ': cannot ' ..
+                   (field == 'extends' and 'extend ' or 'embed ') ..
+                   describe_name(name) .. ': ' .. err
+    end
+    return value, nil, kind
+end
+
 --- resolve_extends merges the grammar diff of the file at pathname into a
---- copy of the grammar it extends.
+--- copy of the grammar it extends and of the mixins it embeds; the
+--- warnings of the mixins are added to state.warnings.
 --- @param state table
 --- @param pathname string
 --- @param diff table
@@ -242,58 +289,121 @@ end
 --- @return string? err
 local function resolve_extends(state, pathname, diff)
     local name = rawget(diff, 'extends')
-    local resolved = resolve(pathname, name)
-    if not resolved then
-        return nil,
-               pathname .. ': invalid extends name: ' .. describe_name(name)
-    end
-    local base, err = get_grammar(state, resolved, 'extends')
+    local base, err, kind = get_named(state, pathname, name, 'extends')
     if not base then
-        if state.active[resolved] then
+        return nil, err
+    elseif kind ~= 'grammar' then
+        return nil, pathname .. ': cannot extend ' .. describe_name(name) ..
+                   ': it is a mixin (embed it with embeds)'
+    end
+    local mixins
+    if rawget(diff, 'embeds') ~= nil then
+        local names
+        names, err = extend.embeds(diff)
+        if not names then
             return nil, pathname .. ': ' .. err
         end
-        return nil, pathname .. ': cannot extend ' .. describe_name(name) ..
-                   ': ' .. err
+        mixins = {}
+        for i, v in ipairs(names) do
+            local chain
+            chain, err, kind = get_named(state, pathname, v, 'embeds')
+            if not chain then
+                return nil, err
+            elseif kind ~= 'mixin' then
+                return nil, pathname .. ': cannot embed ' .. describe_name(v) ..
+                           ': it is not a mixin'
+            end
+            mixins[i] = chain
+        end
     end
-    local grammar
-    grammar, err = extend(base, diff)
+    local grammar, warnings
+    grammar, err, warnings = extend.extend(base, diff, mixins)
     if not grammar then
         return nil, pathname .. ': ' .. err
+    end
+    local list = state.warnings
+    for _, w in ipairs(warnings) do
+        list[#list + 1] = w
     end
     return grammar
 end
 
+--- resolve_mixin checks the mixin def of the file at pathname and returns
+--- its chain (see get_value), or nil and an error message.
+--- @param state table
+--- @param pathname string
+--- @param def table
+--- @return table[]? chain
+--- @return string? err
+local function resolve_mixin(state, pathname, def)
+    local err = check_mixin(def)
+    if err then
+        return nil, (gsub(err, '[^\n]+', pathname .. ': %0'))
+    end
+    local chain = {}
+    local name = rawget(def, 'extends')
+    if name ~= nil then
+        local kind
+        chain, err, kind = get_named(state, pathname, name, 'extends')
+        if not chain then
+            return nil, err
+        elseif kind ~= 'mixin' then
+            return nil, pathname .. ': cannot extend ' .. describe_name(name) ..
+                       ': it is not a mixin'
+        end
+    end
+    chain[#chain + 1] = {
+        source = pathname,
+        diff = def,
+    }
+    return chain
+end
+
 --- run_chunk runs the compiled grammar fn of the file at pathname, and
---- resolves its extends, while the file is marked as being loaded.
+--- resolves its extends and embeds, while the file is marked as being
+--- loaded. It returns the grammar and "grammar", the chain of a mixin and
+--- "mixin", or nil and an error message.
 --- @param state table
 --- @param pathname string
 --- @param fn function
---- @return table? grammar
+--- @return table? value
 --- @return string? err
+--- @return string? kind
 local function run_chunk(state, pathname, fn)
     local stack = state.stack
     state.active[pathname] = true
     stack[#stack + 1] = pathname
     local ok, res = pcall(fn)
     local err
+    local kind = 'grammar'
     if not ok then
         res, err = nil, tostring(res)
     elseif type(res) ~= 'table' then
         res, err = nil, pathname .. ': grammar must return a table, got ' ..
                        type(res)
+    elseif rawget(res, 'mixin') ~= nil then
+        res, err = resolve_mixin(state, pathname, res)
+        kind = 'mixin'
     elseif rawget(res, 'extends') ~= nil then
         res, err = resolve_extends(state, pathname, res)
+    elseif rawget(res, 'embeds') ~= nil then
+        res, err = nil, pathname .. ': embeds needs extends'
     end
     stack[#stack] = nil
     state.active[pathname] = nil
-    return res, err
+    if not res then
+        return nil, err
+    end
+    return res, nil, kind
 end
 
---- load_file loads the grammar file at pathname within state.
+--- load_file loads the grammar or mixin file at pathname within state (see
+--- run_chunk).
 --- @param state table
 --- @param pathname string
---- @return table? grammar
+--- @return table? value
 --- @return string? err
+--- @return string? kind
 function load_file(state, pathname)
     local src, err = read_file(pathname)
     if not src then
@@ -334,15 +444,21 @@ local function normalize(pathname)
     return path
 end
 
+-- The error of loading a mixin as a grammar.
+local NOT_A_GRAMMAR = ': a mixin is not a grammar (embed it with embeds)'
+
 --- load loads the grammar file at pathname and returns the table it
---- returns, merged into the grammar it extends if it has extends, or a new
---- copy of the built-in grammar when pathname is "lexogram:name". Imported
---- and extended files are executed at most once per call. The pathname is
+--- returns, merged into the grammar it extends and the mixins it embeds if
+--- it has extends, or a new copy of the built-in grammar when pathname is
+--- "lexogram:name"; and nil and the warnings of the mixins (see
+--- lexogram.extend), which are none for a built-in grammar. Imported and
+--- extended files are executed at most once per call. The pathname is
 --- normalized first and the normalized form is used everywhere, including
 --- in error messages.
 --- @param pathname string
 --- @return table? grammar
 --- @return string? err
+--- @return table[]? warnings
 local function load(pathname)
     if type(pathname) ~= 'string' then
         error('pathname must be string, got ' .. type(pathname), 2)
@@ -354,21 +470,34 @@ local function load(pathname)
 
     local name = match(pathname, '^lexogram:(' .. PART .. ')$')
     if name then
-        local grammar, err = builtin(name)
+        local grammar, err, kind = builtin_value(name)
         if not grammar then
             return nil, pathname .. ': ' .. err
+        elseif kind ~= 'grammar' then
+            return nil, pathname .. NOT_A_GRAMMAR
         end
-        return grammar
+        return grammar, nil, {}
     end
 
-    return load_file({
-        -- resolved pathname -> grammar of the imported or extended file
+    local state = {
+        -- resolved pathname -> { value, kind } of the imported, extended or
+        -- embedded file
         cache = {},
         -- pathnames of the files being loaded, outermost first
         stack = {},
         -- set of the pathnames in stack
         active = {},
-    }, normalize(pathname))
+        -- warnings of the mixins, in the order they were applied
+        warnings = {},
+    }
+    pathname = normalize(pathname)
+    local grammar, err, kind = load_file(state, pathname)
+    if not grammar then
+        return nil, err
+    elseif kind ~= 'grammar' then
+        return nil, pathname .. NOT_A_GRAMMAR
+    end
+    return grammar, nil, state.warnings
 end
 
 return {
