@@ -41,15 +41,14 @@ local write = require('lexogram.source').write
 --- merge loads the grammar file at pathname, merges it with the grammars it
 --- extends and returns the Lua source text of the result, which extends no
 --- grammar and loads back into an equal table, or nil and an error message.
---- @param pathname string
---- @param builtin string? for tests only (see lexogram.loader)
+--- @param pathname string a grammar file or "lexogram:name"
 --- @return string? source
 --- @return string? err
-local function merge(pathname, builtin)
+local function merge(pathname)
     if type(pathname) ~= 'string' then
         error('pathname must be string, got ' .. type(pathname), 2)
     end
-    local grammar, err = loader.load(pathname, builtin)
+    local grammar, err = loader.load(pathname)
     if not grammar then
         return nil, err
     end

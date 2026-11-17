@@ -606,18 +606,56 @@ function testcase.extends_resolves_names_from_the_file_that_writes_them()
                  loader.load(EXTENDS .. 'base.lua'))
 end
 
-function testcase.extends_reads_built_in_grammars()
-    local grammar, err = loader.load(EXTENDS .. 'from_builtin.lua',
-                                     EXTENDS .. 'builtin/')
+-- the grammar of the test module lexogram.grammars.mini
+local function mini()
+    return {
+        lexogram = '2026.11.15.1',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+        },
+        rules = {
+            chunk = 'name*',
+        },
+    }
+end
 
-    assert.is_nil(err)
-    assert.equal(grammar, loader.load(EXTENDS .. 'builtin/mini.lua'))
-    -- the installed directory has no grammar of that name
-    grammar, err = loader.load(EXTENDS .. 'builtin_missing.lua')
+-- run fn with lexogram.grammars.mini defined by package.preload
+local function with_mini(fn)
+    package.preload['lexogram.grammars.mini'] = function()
+        return mini
+    end
+    local ok, err = pcall(fn)
+    package.preload['lexogram.grammars.mini'] = nil
+    package.loaded['lexogram.grammars.mini'] = nil
+    assert(ok, err)
+end
+
+function testcase.extends_reads_built_in_grammars()
+    with_mini(function()
+        local grammar, err = loader.load(EXTENDS .. 'from_builtin.lua')
+
+        assert.is_nil(err)
+        assert.equal(grammar, mini())
+        -- a built-in grammar is read by its name, as a new copy each time
+        local a = assert(loader.load('lexogram:mini'))
+        assert.equal(a, mini())
+        a.start = 'changed'
+        assert.equal(loader.load('lexogram:mini'), mini())
+    end)
+
+    -- no module has that name
+    local grammar, err = loader.load(EXTENDS .. 'builtin_missing.lua')
     assert.is_nil(grammar)
-    assert.match(err, '^' .. EXTENDS:gsub('%p', '%%%0') ..
-                     'builtin_missing%.lua: cannot extend "lexogram:mini": ',
-                 false)
+    assert.equal(err, EXTENDS .. 'builtin_missing.lua: cannot extend' ..
+                     ' "lexogram:none_such": no built-in grammar named' ..
+                     ' "none_such" (module lexogram.grammars.none_such not' ..
+                     ' found)')
+    grammar, err = loader.load('lexogram:none_such')
+    assert.is_nil(grammar)
+    assert.equal(err, 'lexogram:none_such: no built-in grammar named' ..
+                     ' "none_such" (module lexogram.grammars.none_such not' ..
+                     ' found)')
 end
 
 function testcase.extends_reports_errors()
@@ -642,19 +680,4 @@ function testcase.extends_reports_errors()
                  EXTENDS .. 'number_name.lua: invalid extends name: number')
     assert.equal(err_of('bad_merge'),
                  EXTENDS .. 'bad_merge.lua: tokens.name: already exists')
-end
-
-function testcase.builtin_grammars_need_a_loader_loaded_from_a_file()
-    -- the module compiled from a string does not know its own directory
-    local f = assert(open(ROOT .. 'lib/loader.lua', 'rb'))
-    local src = f:read('*a')
-    f:close()
-    local chunk = assert((loadstring or load)(src, '=loader'))
-    local strayed = chunk()
-
-    local grammar, err = strayed.load(EXTENDS .. 'builtin_missing.lua')
-    assert.is_nil(grammar)
-    assert.equal(err, EXTENDS .. 'builtin_missing.lua: built-in grammars' ..
-                     ' are not available: lexogram.loader was not loaded' ..
-                     ' from a file')
 end

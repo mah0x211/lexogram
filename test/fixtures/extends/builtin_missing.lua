@@ -1,3 +1,3 @@
 return {
-    extends = 'lexogram:mini',
+    extends = 'lexogram:none_such',
 }
