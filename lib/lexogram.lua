@@ -20,7 +20,8 @@
 -- THE SOFTWARE.
 --
 -- lexogram: public entry point of the lexogram library.
--- load(pathname) loads a grammar file (see lexogram.loader) and
+-- load(pathname) loads a grammar file and resolves the grammar it
+-- extends (see lexogram.loader and lexogram.extend),
 -- check(grammar) returns the diagnostics of a grammar table (see
 -- lexogram.check), compile(grammar) compiles it into plain data (see
 -- lexogram.compile), tokenize(compiled, source, pos, mode) finds the

@@ -2204,3 +2204,18 @@ function testcase.check_reports_leading_problems()
                 ' token (reserved for a future version)'),
     })
 end
+
+function testcase.check_rejects_unresolved_extends()
+    -- extends and marked keys are resolved by lexogram.load only
+    local g = leading_grammar(nil)
+    g.extends = 'base'
+    g['+skip'] = {
+        'block',
+    }
+    local diagnostics = check.check(g)
+
+    assert.equal(diagnostics[1],
+                 err('unknown_field', '["+skip"]', 'unknown field ["+skip"]'))
+    assert.equal(diagnostics[2],
+                 err('unknown_field', 'extends', 'unknown field extends'))
+end

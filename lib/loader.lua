@@ -25,6 +25,15 @@
 -- global is an error. The isolation keeps grammar files declarative; it is
 -- not a security sandbox (string methods stay reachable through string
 -- values, and loops are not bounded).
+--
+-- Names of other grammars (the argument of import and the extends field)
+-- are resolved the same way: "name" or "dir/name" is the file name.lua
+-- below the directory of the file that writes it (each part matches
+-- ^[A-Za-z0-9_-]+$, so a name cannot go up, be absolute or hold a drive),
+-- and "lexogram:name" is the built-in grammar name.lua installed in the
+-- grammars directory next to this module (lexogram/grammars/). A grammar
+-- whose table has extends is merged into a copy of that grammar by
+-- lexogram.extend after the file has run.
 local type = type
 local error = error
 local pcall = pcall
@@ -38,9 +47,15 @@ local find = string.find
 local match = string.match
 local gmatch = string.gmatch
 local byte = string.byte
+local sub = string.sub
+local rawget = rawget
 local concat = table.concat
 local getinfo = debug.getinfo
 local load_text = require('lexogram.compat').load_text
+local extend = require('lexogram.extend').extend
+
+-- Pattern of a part of a grammar name.
+local PART = '[A-Za-z0-9_-]+'
 
 --- deep_copy returns a copy of v. Tables are copied recursively, including
 --- table keys; shared and cyclic references are preserved through seen.
@@ -141,59 +156,140 @@ end
 
 local load_file
 
+--- resolve returns the pathname of the grammar name written in the file at
+--- pathname, or nil if name is not a valid name. A name is "lexogram:" and
+--- one part, or parts separated by "/"; a part matches ^[A-Za-z0-9_-]+$,
+--- so a name cannot contain "\", ".", whitespace, control characters or a
+--- NUL byte, and therefore cannot go up (".."), be absolute, hold a drive
+--- or be cut by a C library.
+--- @param state table
+--- @param pathname string
+--- @param name any
+--- @return string? resolved
+--- @return string? err set when name is valid but cannot be resolved
+local function resolve(state, pathname, name)
+    if type(name) ~= 'string' then
+        return nil
+    end
+    local builtin = match(name, '^lexogram:(' .. PART .. ')$')
+    if builtin then
+        if not state.builtin then
+            return nil, 'built-in grammars are not available: ' ..
+                       'lexogram.loader was not loaded from a file'
+        end
+        return state.builtin .. builtin .. '.lua'
+    elseif find(name, '^' .. PART .. '$') or
+        find(name, '^' .. PART .. '/[A-Za-z0-9_/-]*[A-Za-z0-9_-]$') and
+        not find(name, '//', 1, true) then
+        return dirname(pathname) .. name .. '.lua'
+    end
+    return nil
+end
+
+--- get_grammar returns a copy of the grammar at resolved, loading it once
+--- per top-level load, or nil and an error message (circular is the word
+--- used in the message about a cycle).
+--- @param state table
+--- @param resolved string
+--- @param circular string
+--- @return table? grammar
+--- @return string? err
+local function get_grammar(state, resolved, circular)
+    if state.active[resolved] then
+        return nil,
+               'circular ' .. circular .. ': ' .. concat(state.stack, ' -> ') ..
+                   ' -> ' .. resolved
+    end
+    local tbl = state.cache[resolved]
+    if not tbl then
+        local err
+        tbl, err = load_file(state, resolved)
+        if not tbl then
+            return nil, err
+        end
+        state.cache[resolved] = tbl
+    end
+    return deep_copy(tbl, {})
+end
+
 --- new_import returns the import function for the file at pathname.
---- An import can only reach <name>.lua in the directory of the importing
---- file: the name must match ^[A-Za-z0-9_-]+$, so it cannot contain a
---- separator ("/" or "\"), ".", ":", whitespace, control characters or a
---- NUL byte, and therefore cannot be "..", an absolute path, a drive or a
---- path that a C library would truncate.
 --- @param state table state of the current top-level load
 --- @param pathname string the importing file
 --- @return function
 local function new_import(state, pathname)
-    local dir = dirname(pathname)
     return function(name)
-        if type(name) ~= 'string' or not find(name, '^[A-Za-z0-9_-]+$') then
-            raise_import_error(pathname,
-                               'invalid import name: ' .. describe_name(name))
+        local resolved, why = resolve(state, pathname, name)
+        if not resolved then
+            raise_import_error(pathname, why or 'invalid import name: ' ..
+                                   describe_name(name))
         end
-
-        local resolved = dir .. name .. '.lua'
-        if state.active[resolved] then
-            raise_import_error(pathname, 'circular import: ' ..
-                                   concat(state.stack, ' -> ') .. ' -> ' ..
-                                   resolved)
-        end
-
-        local tbl = state.cache[resolved]
+        local tbl, err = get_grammar(state, resolved, 'import')
         if not tbl then
-            local err
-            tbl, err = load_file(state, resolved)
-            if not tbl then
-                raise_import_error(pathname, 'cannot import ' ..
-                                       describe_name(name) .. ': ' .. err)
+            if state.active[resolved] then
+                raise_import_error(pathname, err)
             end
-            state.cache[resolved] = tbl
+            raise_import_error(pathname,
+                               'cannot import ' .. describe_name(name) .. ': ' ..
+                                   err)
         end
-        return deep_copy(tbl, {})
+        return tbl
     end
 end
 
---- run_chunk runs the compiled grammar fn of the file at pathname while
---- the file is marked as being loaded.
+--- resolve_extends merges the grammar diff of the file at pathname into a
+--- copy of the grammar it extends.
+--- @param state table
+--- @param pathname string
+--- @param diff table
+--- @return table? grammar
+--- @return string? err
+local function resolve_extends(state, pathname, diff)
+    local name = rawget(diff, 'extends')
+    local resolved, why = resolve(state, pathname, name)
+    if not resolved then
+        return nil, pathname .. ': ' ..
+                   (why or 'invalid extends name: ' .. describe_name(name))
+    end
+    local base, err = get_grammar(state, resolved, 'extends')
+    if not base then
+        if state.active[resolved] then
+            return nil, pathname .. ': ' .. err
+        end
+        return nil, pathname .. ': cannot extend ' .. describe_name(name) ..
+                   ': ' .. err
+    end
+    local grammar
+    grammar, err = extend(base, diff)
+    if not grammar then
+        return nil, pathname .. ': ' .. err
+    end
+    return grammar
+end
+
+--- run_chunk runs the compiled grammar fn of the file at pathname, and
+--- resolves its extends, while the file is marked as being loaded.
 --- @param state table
 --- @param pathname string
 --- @param fn function
---- @return boolean ok
---- @return any result or error
+--- @return table? grammar
+--- @return string? err
 local function run_chunk(state, pathname, fn)
     local stack = state.stack
     state.active[pathname] = true
     stack[#stack + 1] = pathname
     local ok, res = pcall(fn)
+    local err
+    if not ok then
+        res, err = nil, tostring(res)
+    elseif type(res) ~= 'table' then
+        res, err = nil, pathname .. ': grammar must return a table, got ' ..
+                       type(res)
+    elseif rawget(res, 'extends') ~= nil then
+        res, err = resolve_extends(state, pathname, res)
+    end
     stack[#stack] = nil
     state.active[pathname] = nil
-    return ok, res
+    return res, err
 end
 
 --- load_file loads the grammar file at pathname within state.
@@ -214,14 +310,7 @@ function load_file(state, pathname)
         return nil, err
     end
 
-    local ok, res = run_chunk(state, pathname, fn)
-    if not ok then
-        return nil, tostring(res)
-    elseif type(res) ~= 'table' then
-        return nil,
-               pathname .. ': grammar must return a table, got ' .. type(res)
-    end
-    return res
+    return run_chunk(state, pathname, fn)
 end
 
 --- normalize returns pathname with empty and "." segments removed: repeated
@@ -248,14 +337,30 @@ local function normalize(pathname)
     return path
 end
 
+--- builtin_dir returns the directory of the built-in grammars: grammars/
+--- next to this module, or nil when the module was not loaded from a file.
+--- @return string?
+local function builtin_dir()
+    local source = getinfo(1, 'S').source
+    if byte(source, 1) == 64 then -- "@"
+        return dirname(sub(source, 2)) .. 'grammars/'
+    end
+    return nil
+end
+
+local BUILTIN_DIR = builtin_dir()
+
 --- load loads the grammar file at pathname and returns the table it
---- returns. Imported files are executed at most once per call. The
---- pathname is normalized first and the normalized form is used everywhere,
---- including in error messages.
+--- returns, merged into the grammar it extends if it has extends. Imported
+--- and extended files are executed at most once per call. The pathname is
+--- normalized first and the normalized form is used everywhere, including
+--- in error messages.
 --- @param pathname string
+--- @param builtin string? for tests only: the directory of the built-in
+--- grammars (with a trailing "/") instead of the installed one
 --- @return table? grammar
 --- @return string? err
-local function load(pathname)
+local function load(pathname, builtin)
     if type(pathname) ~= 'string' then
         error('pathname must be string, got ' .. type(pathname), 2)
     elseif find(pathname, '\0', 1, true) then
@@ -265,7 +370,9 @@ local function load(pathname)
     end
 
     return load_file({
-        -- resolved pathname -> table returned by the imported file
+        -- directory of the built-in grammars
+        builtin = builtin or BUILTIN_DIR,
+        -- resolved pathname -> grammar of the imported or extended file
         cache = {},
         -- pathnames of the files being loaded, outermost first
         stack = {},
