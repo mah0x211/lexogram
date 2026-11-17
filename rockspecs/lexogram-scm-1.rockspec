@@ -33,6 +33,7 @@ build = {
         ["lexogram.events"] = "lib/events.lua",
         ["lexogram.extend"] = "lib/extend.lua",
         ["lexogram.grammar"] = "lib/grammar.lua",
+        ["lexogram.grammars.lua51"] = "grammars/lua51.lua",
         ["lexogram.loader"] = "lib/loader.lua",
         ["lexogram.pattern"] = "lib/pattern.lua",
         ["lexogram.source"] = "lib/source.lua",
