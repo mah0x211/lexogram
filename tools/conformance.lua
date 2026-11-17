@@ -24,13 +24,16 @@
 -- the sources that the official compiler accepts (luac -p). Run it on a
 -- machine with luac installed; it is not a module of the library.
 --
---   lua tools/conformance.lua [--strip-shebang] <grammar> <luac> [file ...]
+--   lua tools/conformance.lua [--strip-bom] [--strip-shebang] <grammar>
+--       <luac> [file ...]
 --
 -- <grammar> is a grammar file or a built-in grammar ("lexogram:lua51"),
 -- <luac> the compiler of the matching Lua version. The files are read from
--- the arguments, or one per line from the standard input. --strip-shebang
--- blanks a first line that starts with "#" before parsing, as the file
--- loader of Lua does (use it for a grammar without such a leading token).
+-- the arguments, or one per line from the standard input. Before parsing,
+-- --strip-bom blanks a UTF-8 byte order mark at the start, as the file
+-- loader of Lua 5.2 and later does, and --strip-shebang a first line that
+-- starts with "#" (after the byte order mark), as the file loader of every
+-- version does; use them for a grammar without such a leading token.
 --
 -- Each disagreement is printed as "lexogram-only <file>" (the grammar
 -- accepts what luac rejects) or "official-only <file>" (the grammar
@@ -62,15 +65,19 @@ end
 --- @param args string[]
 --- @return integer
 local function main(args)
-    local strip = false
-    if args[1] == '--strip-shebang' then
-        strip = true
+    local bom, shebang = false, false
+    while args[1] == '--strip-bom' or args[1] == '--strip-shebang' do
+        if args[1] == '--strip-bom' then
+            bom = true
+        else
+            shebang = true
+        end
         table.remove(args, 1)
     end
     local name, luac = args[1], args[2]
     if not name or not luac then
-        io.stderr:write('usage: lua tools/conformance.lua [--strip-shebang]' ..
-                            ' <grammar> <luac> [file ...]\n')
+        io.stderr:write('usage: lua tools/conformance.lua [--strip-bom]' ..
+                            ' [--strip-shebang] <grammar> <luac> [file ...]\n')
         return 2
     end
     local grammar = assert(lexogram.load(name))
@@ -99,11 +106,16 @@ local function main(args)
         else
             local src = f:read('*a')
             f:close()
-            if strip then
+            local start = ''
+            if bom and src:sub(1, 3) == '\239\187\191' then
+                start, src = '   ', src:sub(4)
+            end
+            if shebang then
                 src = src:gsub('^#[^\n]*', function(line)
                     return (' '):rep(#line)
                 end, 1)
             end
+            src = start .. src
             local ours = lexogram.parse(compiled, src) ~= nil
             local theirs = official_accepts(luac, pathname)
             if ours == theirs then
