@@ -8,6 +8,8 @@ local version = require('lexogram.version')
 local function small_grammar()
     return {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '(ALPHA | "_") (ALPHA | DIGIT | "_")*',
@@ -44,6 +46,8 @@ end
 local function lua_grammar()
     return {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '(ALPHA | "_") (ALPHA | DIGIT | "_")*',

@@ -77,6 +77,10 @@ local function builtin(name)
         return nil, 'module lexogram.grammars.' .. name ..
                    ' must return a function that returns a table, got ' ..
                    type(grammar)
+    elseif rawget(grammar, 'name') ~= name then
+        return nil,
+               'module lexogram.grammars.' .. name .. ' defines the grammar ' ..
+                   tostring(rawget(grammar, 'name'))
     end
     return grammar
 end
@@ -128,7 +132,7 @@ local function new(def)
     -- tables, which all have source text
     local src = assert(write(grammar, {}))
     local chunk = assert(load_text('return function()\n' .. src .. 'end\n',
-                                   '=lexogram.grammar', {}))
+                                   '=lexogram.grammar:' .. grammar.name, {}))
     return chunk()
 end
 

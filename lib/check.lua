@@ -67,15 +67,17 @@ local ROOT = {}
 -- Top-level fields in their sort order.
 local ROOT_ORDER = {
     lexogram = 1,
-    start = 2,
-    tokens = 3,
-    symbols = 4,
-    keywords = 5,
-    skip = 6,
-    leading = 7,
-    rules = 8,
-    greedy = 9,
-    recover = 10,
+    name = 2,
+    version = 3,
+    start = 4,
+    tokens = 5,
+    symbols = 6,
+    keywords = 7,
+    skip = 8,
+    leading = 9,
+    rules = 10,
+    greedy = 11,
+    recover = 12,
 }
 -- Required fields of a delimited token table.
 local DELIMITERS = {
@@ -90,6 +92,8 @@ local PREFIXED_FIELDS = {
 -- Top-level fields that must be present, in the order they are reported.
 local REQUIRED_FIELDS = {
     'lexogram',
+    'name',
+    'version',
     'start',
     'tokens',
     'rules',
@@ -317,6 +321,30 @@ local function string_key_required(ctx, segments)
 end
 
 -- structure pass: field shapes
+
+--- check_name checks the name of the grammar: the same shape as the name
+--- of a built-in grammar or a grammar file.
+--- @param ctx table
+--- @param segments any[]
+--- @param value string
+local function check_name(ctx, segments, value)
+    if not find(value, '^[A-Za-z0-9_-]+$') then
+        add_error(ctx, 'invalid_value', segments, label(segments) ..
+                      ' must match ^[A-Za-z0-9_-]+$, got ' .. quote(value))
+    end
+end
+
+--- check_grammar_version checks the version of the grammar itself, which
+--- is MAJOR.MINOR.PATCH.
+--- @param ctx table
+--- @param segments any[]
+--- @param value string
+local function check_grammar_version(ctx, segments, value)
+    if not find(value, '^%d+%.%d+%.%d+$') then
+        add_error(ctx, 'invalid_value', segments, label(segments) ..
+                      ' must be MAJOR.MINOR.PATCH, got ' .. quote(value))
+    end
+end
 
 --- check_lexogram checks the version field.
 --- @param ctx table
@@ -632,6 +660,16 @@ local FIELDS = {
         name = 'lexogram',
         type = 'string',
         check = check_lexogram,
+    },
+    {
+        name = 'name',
+        type = 'string',
+        check = check_name,
+    },
+    {
+        name = 'version',
+        type = 'string',
+        check = check_grammar_version,
     },
     {
         name = 'start',

@@ -50,6 +50,8 @@ local byte_less = require('lexogram.compat').byte_less
 -- table.
 local ROOT_ORDER = {
     'lexogram',
+    'name',
+    'version',
     'start',
     'tokens',
     'symbols',

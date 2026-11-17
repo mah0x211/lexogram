@@ -31,6 +31,8 @@
 --
 --   lexogram  the specification revision in effect for the grammar (an
 --             entry of the revision history, not the grammar's own string)
+--   name      the name of the grammar
+--   version   the version of the grammar (MAJOR.MINOR.PATCH)
 --   kinds     array indexed by kind id of { name, category, skip }:
 --               1 = { name = 'INVALID', category = 'error' }: a byte that
 --                   matches no token
@@ -215,6 +217,8 @@ local function build_object(grammar, lexer, syntax)
     automata.delimited = delimited_entries(lexer.delimited.entries)
     return {
         lexogram = resolve_version(rawget(grammar, 'lexogram')),
+        name = rawget(grammar, 'name'),
+        version = rawget(grammar, 'version'),
         kinds = kinds,
         names = names,
         literals = literals,

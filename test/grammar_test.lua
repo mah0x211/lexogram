@@ -6,6 +6,8 @@ local grammar = require('lexogram.grammar')
 local function base()
     return {
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '[a-z]+',
@@ -18,6 +20,13 @@ local function base()
             chunk = 'name*',
         },
     }
+end
+
+-- the function of the built-in grammar base
+local function builtin_base()
+    local g = base()
+    g.name = 'base'
+    return g
 end
 
 -- define the module lexogram.grammars.<name> to return value, run fn and
@@ -46,6 +55,8 @@ function testcase.new_returns_a_function_of_new_copies()
     a.tokens.name = 'changed'
     def.start = 'changed'
     assert.equal(fn(), base())
+    -- the chunk is named after the grammar
+    assert.equal(debug.getinfo(fn, 'S').source, '=lexogram.grammar:test')
     -- each call runs the table constructors again
     assert.not_rawequal(fn(), fn())
     assert.not_rawequal(fn().tokens, fn().tokens)
@@ -53,11 +64,11 @@ function testcase.new_returns_a_function_of_new_copies()
 end
 
 function testcase.new_merges_a_grammar_that_extends_a_built_in_one()
-    with_module('base', function()
-        return base()
-    end, function()
+    with_module('base', builtin_base, function()
         local fn = assert(grammar({
             extends = 'lexogram:base',
+            name = 'derived',
+            version = '2.0.0',
             ['++tokens'] = {
                 number = 'DIGIT+',
             },
@@ -66,6 +77,8 @@ function testcase.new_merges_a_grammar_that_extends_a_built_in_one()
             },
         }))
         local expected = base()
+        expected.name = 'derived'
+        expected.version = '2.0.0'
         expected.tokens.number = 'DIGIT+'
         expected.rules.chunk = '(name | number)*'
 
@@ -112,9 +125,7 @@ function testcase.new_reports_errors_of_extends()
         extends = 'lexogram:none_such',
     }), 'cannot extend "lexogram:none_such": no built-in grammar named' ..
                      ' "none_such" (module lexogram.grammars.none_such not found)')
-    with_module('base', function()
-        return base()
-    end, function()
+    with_module('base', builtin_base, function()
         assert.equal(err_of({
             extends = 'lexogram:base',
             ['++tokens'] = {
@@ -136,6 +147,13 @@ function testcase.builtin_reports_modules_of_other_shapes()
         assert.equal(select(2, grammar.builtin('string')),
                      'module lexogram.grammars.string must return a function' ..
                          ' that returns a table, got string')
+    end)
+    -- the module must define the grammar of its name
+    with_module('other', function()
+        return base()
+    end, function()
+        assert.equal(select(2, grammar.builtin('other')),
+                     'module lexogram.grammars.other defines the grammar test')
     end)
     -- other errors of require are passed on as they are
     package.preload['lexogram.grammars.broken'] = function()

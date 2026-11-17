@@ -7,6 +7,8 @@ local lexogram = require('lexogram')
 local function parsed(source)
     local compiled = assert(lexogram.compile({
         lexogram = '2026.11.15.1',
+        name = 'test',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '[a-z]+',

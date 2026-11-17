@@ -564,6 +564,8 @@ function testcase.extends_merges_into_the_base_through_every_level()
     assert.is_nil(err)
     assert.equal(grammar, {
         lexogram = '2026.11.15.1',
+        name = 'grandchild',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '[a-z]+',
@@ -592,6 +594,8 @@ function testcase.extends_resolves_names_from_the_file_that_writes_them()
     -- deep extends sub/inner, and sub/inner extends sub/leaf
     assert.equal(loader.load(EXTENDS .. 'deep.lua'), {
         lexogram = '2026.11.15.1',
+        name = 'deep',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '[a-z]+',
@@ -610,6 +614,8 @@ end
 local function mini()
     return {
         lexogram = '2026.11.15.1',
+        name = 'mini',
+        version = '1.0.0',
         start = 'chunk',
         tokens = {
             name = '[a-z]+',
