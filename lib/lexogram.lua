@@ -23,8 +23,10 @@
 -- load(pathname) loads a grammar file (see lexogram.loader) and
 -- check(grammar) returns the diagnostics of a grammar table (see
 -- lexogram.check), compile(grammar) compiles it into plain data (see
--- lexogram.compile) and tokenize(compiled, source, pos, mode) finds the
--- token at a position (see lexogram.tokenizer).
+-- lexogram.compile), tokenize(compiled, source, pos, mode) finds the
+-- token at a position (see lexogram.tokenizer) and parse(compiled, source)
+-- returns the event array of a source (see lexogram.analyzer).
+local analyzer = require('lexogram.analyzer')
 local loader = require('lexogram.loader')
 local check = require('lexogram.check')
 local compile = require('lexogram.compile')
@@ -35,4 +37,5 @@ return {
     check = check.check,
     compile = compile.compile,
     tokenize = tokenizer.tokenize,
+    parse = analyzer.parse,
 }
