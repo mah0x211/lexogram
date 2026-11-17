@@ -123,14 +123,12 @@ local function tokenize(compiled, s)
     local out = {}
     local pos = 1
     while pos <= #s do
-        local id, stop = longest(lexer.open, s, pos)
-        if id then
-            local entry
-            for _, e in ipairs(lexer.delimited) do
-                if e.id == id then
-                    entry = e
-                end
-            end
+        local index, stop = longest(lexer.open, s, pos)
+        local id
+        if index then
+            -- the open automaton accepts an index into delimited
+            local entry = lexer.delimited[index]
+            id = entry.id
             local captured = ''
             if entry.capture then
                 local first = pos + entry.prefix

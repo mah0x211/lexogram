@@ -35,11 +35,12 @@
 -- a body of n bytes and a close of m bytes.
 --
 -- With nest set, the body is scanned position by position: the close is
--- tried first, then the open automaton; an open of the same delimited
--- token with the same captured bytes either opens a nested level that
--- needs its own close (nest = 'count'), or is reported (nest = 'error':
--- the token still ends at the first close, so tokenizing can go on, and
--- the position of the first such open is returned).
+-- tried first, then the open automaton; an open of the inner entry (the
+-- delimited token itself, or the table named by a prefixed table) with the
+-- same captured bytes either opens a nested level that needs its own close
+-- (nest = 'count'), or is reported (nest = 'error': the token still ends
+-- at the first close, so tokenizing can go on, and the position of the
+-- first such open is returned).
 local type = type
 local error = error
 local floor = math.floor
@@ -167,7 +168,8 @@ local function find_close(close, source, from, len, cap_start, cap_end)
 end
 
 --- same_capture returns true if the capture of an open of entry matched at
---- at holds the same bytes as cap_start..cap_end - 1.
+--- at holds the same bytes as cap_start..cap_end - 1 (always true for an
+--- entry without a capture).
 --- @param entry table
 --- @param source string
 --- @param at integer
@@ -218,9 +220,10 @@ local function scan_nested(lexer, entry, source, from, len, cap_start, cap_end)
             depth = depth - 1
             at = stop
         else
-            local kind, open_stop = longest(lexer.open, source, at, len)
-            if kind == entry.id and
-                same_capture(entry, source, at, len, cap_start, cap_end) then
+            local index, open_stop = longest(lexer.open, source, at, len)
+            if index == entry.inner and
+                same_capture(lexer.delimited[index], source, at, len, cap_start,
+                             cap_end) then
                 if count then
                     depth = depth + 1
                     at = open_stop
@@ -236,13 +239,13 @@ local function scan_nested(lexer, entry, source, from, len, cap_start, cap_end)
     return nil, nested
 end
 
---- delimited_token returns kind and the stop of the delimited token kind
---- whose open matched source from pos to open_stop; a third value
---- 'unterminated' marks a token without close (it runs to the end of
+--- delimited_token returns the kind and the stop of the delimited token of
+--- the entry index whose open matched source from pos to open_stop; a third
+--- value 'unterminated' marks a token without close (it runs to the end of
 --- input), and 'nested' with a fourth value marks an open nested at that
 --- position in a token whose nest is 'error'.
 --- @param lexer table
---- @param kind integer
+--- @param index integer
 --- @param source string
 --- @param pos integer
 --- @param open_stop integer
@@ -251,15 +254,9 @@ end
 --- @return integer stop
 --- @return string? problem 'unterminated' or 'nested'
 --- @return integer? at position of the nested open
-local function delimited_token(lexer, kind, source, pos, open_stop, len)
-    local list = lexer.delimited
-    local entry
-    for i = 1, #list do
-        if list[i].id == kind then
-            entry = list[i]
-            break
-        end
-    end
+local function delimited_token(lexer, index, source, pos, open_stop, len)
+    local entry = lexer.delimited[index]
+    local kind = entry.id
     local cap_start, cap_end = pos, pos
     if entry.capture then
         cap_start = pos + entry.prefix
@@ -313,10 +310,11 @@ local function tokenize(compiled, source, pos, mode)
         return nil
     end
     local lexer = compiled.lexer
-    local kind, stop = longest(lexer.open, source, pos, len)
-    if kind then
-        return delimited_token(lexer, kind, source, pos, stop, len)
+    local index, stop = longest(lexer.open, source, pos, len)
+    if index then
+        return delimited_token(lexer, index, source, pos, stop, len)
     end
+    local kind
     kind, stop = longest(lexer, source, pos, len)
     if kind then
         return kind, stop

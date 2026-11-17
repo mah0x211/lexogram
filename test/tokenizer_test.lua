@@ -607,3 +607,98 @@ function testcase.compile_keeps_the_nest_setting()
     })
     assert.is_nil(plain.lexer.delimited[1].nest)
 end
+
+-- Lua 5.1 long brackets: level 0 rejects a nested [[, the levels with "="
+-- do not; the long comment is "--" followed by either, and the line
+-- comment is a pattern token. doc is a counted block behind "#".
+local PREFIXED = compiled_of({
+    tokens = {
+        name = '[a-z]+',
+        space = '[ \\n]+',
+        comment = '"--" [^\\n]*',
+        long_string = {
+            open = '"[["',
+            close = '"]]"',
+            nest = 'error',
+        },
+        long_level = {
+            open = '"[" level "["',
+            close = '"]" level "]"',
+            level = '"="+',
+        },
+        long_comment = {
+            prefix = '"--"',
+            match = {
+                'long_string',
+                'long_level',
+            },
+        },
+        block = {
+            open = '"(*"',
+            close = '"*)"',
+            nest = 'count',
+        },
+        doc = {
+            prefix = '"#"',
+            match = {
+                'block',
+            },
+        },
+    },
+    rules = {
+        chunk = '(name | long_string | long_level | block | doc)*',
+    },
+})
+
+function testcase.tokenize_reads_prefixed_delimited_tokens()
+    assert.equal(lex(PREFIXED, '--[[ a ]] x -- y\n--[x\n---[[ z'), {
+        'long_comment:--[[ a ]]',
+        'space: ',
+        'name:x',
+        'space: ',
+        'comment:-- y',
+        'space:\n',
+        'comment:--[x',
+        'space:\n',
+        'comment:---[[ z',
+    })
+    -- the long comment wins over the longer line comment
+    assert.equal(lex(PREFIXED, '--[==[ ]=] ]==] x'), {
+        'long_comment:--[==[ ]=] ]==]',
+        'space: ',
+        'name:x',
+    })
+    -- the named table is still a token of its own
+    assert.equal(lex(PREFIXED, '[[ a ]][=[ b ]=]'), {
+        'long_string:[[ a ]]',
+        'long_level:[=[ b ]=]',
+    })
+end
+
+function testcase.tokenize_nests_prefixed_tokens_by_the_named_table()
+    -- a nested open is the open of the named table, without the prefix
+    assert.equal(lex(PREFIXED, '--[[ a [[ b ]] c'), {
+        'long_comment:--[[ a [[ b ]]?',
+        'space: ',
+        'name:c',
+    })
+    assert.equal({
+        tokenizer.tokenize(PREFIXED, '--[[ a --[[ b ]]', 1),
+    }, {
+        PREFIXED.names.long_comment,
+        17,
+        'nested',
+        10,
+    })
+    assert.equal(lex(PREFIXED, '--[=[ [[ ]] ]=]'), {
+        'long_comment:--[=[ [[ ]] ]=]',
+    })
+    assert.equal(lex(PREFIXED, '#(* a (* b *) c #(* d *) *) e'), {
+        'doc:#(* a (* b *) c #(* d *) *)',
+        'space: ',
+        'name:e',
+    })
+    assert.equal(lex(PREFIXED, '--[=[ a'), {
+        'long_comment:--[=[ a!',
+    })
+end

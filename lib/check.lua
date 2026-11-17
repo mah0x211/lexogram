@@ -47,6 +47,7 @@ local escape_key = text.escape
 local quote = text.quote
 local build_lexer = require('lexogram.compile.lexer').build
 local DELIMITED_SETTINGS = require('lexogram.compile.delimited').SETTINGS
+local is_prefixed = require('lexogram.compile.delimited').is_prefixed
 local analyze_syntax = require('lexogram.compile.syntax').analyze
 local parse_pattern = require('lexogram.pattern').parse
 
@@ -79,6 +80,11 @@ local ROOT_ORDER = {
 local DELIMITERS = {
     'open',
     'close',
+}
+-- Required fields of a prefixed delimited token table.
+local PREFIXED_FIELDS = {
+    'prefix',
+    'match',
 }
 -- Top-level fields that must be present, in the order they are reported.
 local REQUIRED_FIELDS = {
@@ -346,19 +352,29 @@ local function check_nest(ctx, segments, value)
     end
 end
 
---- check_delimited checks a delimited token table.
+--- check_required adds missing_field for each field of names that tbl
+--- does not have.
 --- @param ctx table
 --- @param segments any[]
 --- @param tbl table
-local function check_delimited(ctx, segments, tbl)
-    for i = 1, #DELIMITERS do
-        local name = DELIMITERS[i]
+--- @param names string[]
+local function check_required(ctx, segments, tbl, names)
+    for i = 1, #names do
+        local name = names[i]
         if rawget(tbl, name) == nil then
             local segs = child(segments, name)
             add_error(ctx, 'missing_field', segs,
                       'required field ' .. label(segs) .. ' is missing')
         end
     end
+end
+
+--- check_delimited checks a delimited token table.
+--- @param ctx table
+--- @param segments any[]
+--- @param tbl table
+local function check_delimited(ctx, segments, tbl)
+    check_required(ctx, segments, tbl, DELIMITERS)
     for k, v in next, tbl do
         local segs = child(segments, k)
         if type(k) ~= 'string' then
@@ -371,6 +387,9 @@ local function check_delimited(ctx, segments, tbl)
     end
 end
 
+-- defined after the array checks it uses
+local check_prefixed
+
 --- check_tokens checks the tokens table.
 --- @param ctx table
 --- @param segments any[]
@@ -381,6 +400,8 @@ local function check_tokens(ctx, segments, tbl)
         local t = type(v)
         if type(k) ~= 'string' then
             string_key_required(ctx, segs)
+        elseif t == 'table' and is_prefixed(v) then
+            check_prefixed(ctx, segs, v)
         elseif t == 'table' then
             check_delimited(ctx, segs, v)
         elseif t ~= 'string' then
@@ -547,6 +568,35 @@ end
 local function check_name_list(ctx, segments, tbl)
     local n = scan_array_keys(ctx, segments, tbl, reject_setting)
     check_items(ctx, segments, tbl, n, false)
+end
+
+--- check_prefixed checks a prefixed delimited token table: prefix is a
+--- pattern string and match a non-empty array of names.
+--- @param ctx table
+--- @param segments any[]
+--- @param tbl table
+function check_prefixed(ctx, segments, tbl)
+    check_required(ctx, segments, tbl, PREFIXED_FIELDS)
+    for k, v in next, tbl do
+        local segs = child(segments, k)
+        if type(k) ~= 'string' then
+            string_key_required(ctx, segs)
+        elseif k == 'prefix' then
+            expect_type(ctx, segs, v, 'string')
+        elseif k ~= 'match' then
+            add_error(ctx, 'unknown_field', segs,
+                      'unknown field ' .. label(segs) ..
+                          ' (a table with prefix or match' ..
+                          ' is a prefixed delimited token table)')
+        elseif expect_type(ctx, segs, v, 'table') then
+            local n = scan_array_keys(ctx, segs, v, reject_setting)
+            if n == 0 then
+                add_error(ctx, 'invalid_value', segs,
+                          label(segs) .. ' must have at least one item')
+            end
+            check_items(ctx, segs, v, n, false)
+        end
+    end
 end
 
 --- check_cross_duplicates reports keywords items that also are symbols.
@@ -749,7 +799,7 @@ local function collect_tokens(ctx, tokens, kinds)
                 kind = 'token'
             end
             define(kinds, k, kind)
-            if type(v) == 'table' then
+            if type(v) == 'table' and not is_prefixed(v) then
                 check_captures(ctx, segs, v)
             end
         end
@@ -836,6 +886,39 @@ local function check_reference_list(ctx, name, expected)
     end
 end
 
+--- check_match_references checks that the items of the match of each
+--- prefixed delimited token table name delimited token tables with open
+--- and close.
+--- @param ctx table
+--- @param tokens table
+local function check_match_references(ctx, tokens)
+    for k, v in next, tokens do
+        local match = type(v) == 'table' and rawget(v, 'match')
+        if type(k) == 'string' and type(match) == 'table' then
+            local segments = child(child(ctx.tokens_segments, k), 'match')
+            for i = 1, array_length(match) do
+                local name = rawget(match, i)
+                -- other items are reported by the structure pass
+                if type(name) == 'string' and name ~= '' then
+                    local segs = child(segments, i)
+                    local target = rawget(tokens, name)
+                    if target == nil then
+                        add_error(ctx, 'undefined_reference', segs,
+                                  label(segs) ..
+                                      ' refers to undefined delimited token ' ..
+                                      quote(name))
+                    elseif type(target) ~= 'table' or is_prefixed(target) then
+                        add_error(ctx, 'invalid_reference', segs,
+                                  label(segs) .. ' refers to ' .. quote(name) ..
+                                      ', which is not a delimited token' ..
+                                      ' table with open and close')
+                    end
+                end
+            end
+        end
+    end
+end
+
 --- check_names checks definition names, the shared namespace of tokens and
 --- rules, capture names and the plain references in start, skip, greedy
 --- and recover. Malformed fields, keys and items are skipped silently; the
@@ -851,6 +934,7 @@ local function check_names(ctx)
     ctx.kinds = {}
     if tokens then
         collect_tokens(ctx, tokens, ctx.kinds)
+        check_match_references(ctx, tokens)
     end
     if rules then
         collect_rules(ctx, rules, tokens, ctx.kinds)
@@ -959,6 +1043,11 @@ local function parse_all(ctx, tokens, rules)
             local segs = child(ctx.tokens_segments, k)
             if type(v) == 'string' then
                 parse_at(ctx, segs, v, 'tokens')
+            elseif type(v) == 'table' and is_prefixed(v) then
+                local prefix = rawget(v, 'prefix')
+                if type(prefix) == 'string' then
+                    parse_at(ctx, child(segs, 'prefix'), prefix, 'tokens')
+                end
             elseif type(v) == 'table' then
                 parse_delimited(ctx, segs, v)
             end
@@ -1247,6 +1336,15 @@ local function check_patterns(ctx)
 
     if has_error(ctx) then
         return
+    end
+    -- a delimited token table named by a prefixed table is used by it
+    for _, v in next, tokens do
+        if type(v) == 'table' and is_prefixed(v) then
+            local match = rawget(v, 'match')
+            for i = 1, #match do
+                usage.names[rawget(match, i)] = true
+            end
+        end
     end
     warn_unused_tokens(ctx, tokens, usage)
     -- items is not nil here: a symbols or keywords field of the wrong type

@@ -118,14 +118,12 @@ local RESERVED = {
 --- reserved kinds INVALID and ERROR as ids 1 and 2, then pattern tokens
 --- sorted by name, symbols and keywords in index order, and delimited
 --- tokens sorted by name), the nfa definitions of the pattern
---- tokens and literals, the ranks, the fragments and the ids of the
---- delimited tokens by name.
+--- tokens and literals, the ranks and the fragments.
 --- @param grammar table
 --- @return table[] defs
 --- @return table[] nfa_defs
 --- @return table rank
 --- @return table fragments
---- @return table delimited_ids name -> id
 local function collect_definitions(grammar)
     local tokens = rawget(grammar, 'tokens')
     local names, fragments, tables = collect_tokens(tokens)
@@ -182,7 +180,6 @@ local function collect_definitions(grammar)
             end
         end
     end
-    local delimited_ids = {}
     for _, name in ipairs(tables) do
         local id = #defs + 1
         defs[id] = {
@@ -191,9 +188,8 @@ local function collect_definitions(grammar)
             name = name,
             segments = pair('tokens', name),
         }
-        delimited_ids[name] = id
     end
-    return defs, nfa_defs, rank, fragments, delimited_ids
+    return defs, nfa_defs, rank, fragments
 end
 
 --- check_recursion adds fragment_recursion for each cycle of fragment
@@ -287,40 +283,80 @@ local function too_large(diagnostics, err)
 end
 
 --- build_delimited checks and compiles the delimited token tables. It
---- returns { open, tokens }, or nil and an automaton_too_large error.
+--- returns { open, tokens, entries }, or nil and an automaton_too_large
+--- error. tokens maps the kind id of each table with open and close to its
+--- compiled token; entries lists, in the order of the indexes accepted by
+--- open, { id, token, inner } for those tables and for each table named by
+--- a prefixed table (id is the kind id, inner the index of the entry whose
+--- open is a nested open).
 --- @param grammar table
 --- @param defs table[]
---- @param ids table delimited token name -> id
 --- @param fragments table
 --- @param diagnostics table[]
 --- @param limits table { nfa, dfa }
---- @return table? delimited { open, tokens }
+--- @return table? delimited { open, tokens, entries }
 --- @return table? err
-local function build_delimited(grammar, defs, ids, fragments, diagnostics,
-                               limits)
+local function build_delimited(grammar, defs, fragments, diagnostics, limits)
     local tokens = rawget(grammar, 'tokens')
-    local entries, compiled = {}, {}
+    local by_name, compiled = {}, {}
     for _, def in ipairs(defs) do
-        if def.kind == 'delimited' then
-            local entry, err = delimited.analyze(def.name,
-                                                 rawget(tokens, def.name),
-                                                 fragments, diagnostics, limits)
+        local tbl = def.kind == 'delimited' and rawget(tokens, def.name)
+        if tbl and not delimited.is_prefixed(tbl) then
+            local entry, err = delimited.analyze(def.name, tbl, fragments,
+                                                 diagnostics, limits)
             if err then
                 return nil, err
             elseif entry then
-                entries[#entries + 1] = entry
+                by_name[def.name] = entry
                 compiled[def.id] = entry.token
             end
         end
     end
-    local open, err = delimited.build_open(entries, ids, fragments, diagnostics,
+
+    -- entries in kind id order; the entries of a prefixed table follow the
+    -- order of its match
+    local entries = {}
+    for _, def in ipairs(defs) do
+        local tbl = def.kind == 'delimited' and rawget(tokens, def.name)
+        local list
+        if not tbl then
+            list = {}
+        elseif delimited.is_prefixed(tbl) then
+            list = delimited.analyze_prefixed(def.name, tbl, by_name, fragments,
+                                              diagnostics)
+        else
+            list = {
+                by_name[def.name],
+            }
+        end
+        for _, entry in ipairs(list) do
+            entry.id = def.id
+            entries[#entries + 1] = entry
+        end
+    end
+    local open, err = delimited.build_open(entries, fragments, diagnostics,
                                            limits)
     if not open then
         return nil, err
     end
+
+    local index, out = {}, {}
+    for i, entry in ipairs(entries) do
+        if entry.field == 'open' then
+            index[entry.name] = i
+        end
+    end
+    for i, entry in ipairs(entries) do
+        out[i] = {
+            id = entry.id,
+            token = entry.token,
+            inner = index[entry.inner],
+        }
+    end
     return {
         open = open,
         tokens = compiled,
+        entries = out,
     }
 end
 
@@ -344,7 +380,7 @@ local function build(grammar, limits)
         },
     }
     local diagnostics = {}
-    local defs, nfa_defs, rank, fragments, ids = collect_definitions(grammar)
+    local defs, nfa_defs, rank, fragments = collect_definitions(grammar)
     if check_recursion(diagnostics, fragments) then
         return nil, diagnostics
     end
@@ -360,7 +396,7 @@ local function build(grammar, limits)
     end
 
     local compiled
-    compiled, err = build_delimited(grammar, defs, ids, fragments, diagnostics,
+    compiled, err = build_delimited(grammar, defs, fragments, diagnostics,
                                     limits)
     if not compiled then
         return too_large(diagnostics, err)
