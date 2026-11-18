@@ -32,7 +32,9 @@ function testcase.write_orders_fields_and_keys()
         },
         [1] = 'item',
         [true] = 1.5,
+        [false] = 0,
         [2.5] = 2,
+        [-1] = 3,
     }, {
         'first line',
         'second line',
@@ -63,7 +65,9 @@ function testcase.write_orders_fields_and_keys()
         "        ['end'] = 'x',",
         "        ['two words'] = 'y',",
         "    },",
+        "    [-1] = 3,",
         "    [2.5] = 2,",
+        "    [false] = 0,",
         "    [true] = 1.5,",
         "}",
         "",
@@ -165,6 +169,13 @@ function testcase.write_reports_values_it_cannot_write()
         {
             {
                 [{}] = 1,
+            },
+            '[table: ',
+        },
+        {
+            {
+                [{}] = 1,
+                [{}] = 2,
             },
             '[table: ',
         },

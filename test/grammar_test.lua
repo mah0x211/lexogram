@@ -292,6 +292,52 @@ function testcase.new_defines_a_mixin()
     end)
 end
 
+function testcase.builtin_value_reports_errors_of_the_chain_of_a_mixin()
+    -- a built-in module that returns the mixin def as it is, as one that
+    -- does not define it with lexogram.grammar can
+    local function raw(make, extends)
+        return function()
+            local def = make()
+            def.extends = extends
+            return def
+        end
+    end
+    local function err_of(name)
+        local value, err = grammar.builtin_value(name)
+        assert.is_nil(value)
+        return err
+    end
+    with_module('base', builtin_base, function()
+        for _, case in ipairs({
+            {
+                'number',
+                'extends must name a built-in mixin ("lexogram:<name>"),' ..
+                    ' got number',
+            },
+            {
+                'lexogram:none',
+                'cannot extend "lexogram:none": no built-in grammar named' ..
+                    ' "none" (module lexogram.grammars.none not found)',
+            },
+            {
+                'lexogram:base',
+                'cannot extend "lexogram:base": it is not a mixin',
+            },
+        }) do
+            with_module('hex', raw(hex_mixin, case[1]), function()
+                assert.equal(err_of('hex'), case[2])
+            end)
+        end
+        -- the error of a mixin that it extends
+        with_module('number', raw(number_mixin, 'lexogram:base'), function()
+            with_module('hex', raw(hex_mixin, 'lexogram:number'), function()
+                assert.equal(err_of('hex'),
+                             'cannot extend "lexogram:base": it is not a mixin')
+            end)
+        end)
+    end)
+end
+
 function testcase.new_reports_errors_of_a_mixin()
     local function err_of(def)
         local fn, err, diagnostics = grammar(def)
