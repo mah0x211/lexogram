@@ -206,10 +206,11 @@ local TOO_LARGE = {}
 --- new_builder returns an empty machine under construction.
 --- @param max_states integer
 --- @return table
-local function new_builder(max_states, preds)
+local function new_builder(max_states, preds, ignore_lookaheads)
     return {
         max_states = max_states,
         preds = preds,
+        ignore_lookaheads = ignore_lookaheads,
         count = 0,
         eps = {},
         geps = {},
@@ -389,6 +390,64 @@ local function add_class(m, from, to, node)
     end
 end
 
+--- class_ranges returns, for each class of the automaton d, the byte
+--- ranges of that class as an array of { lo, hi }.
+--- @param d table
+--- @return table[]
+local function class_ranges(d)
+    local ranges = {}
+    for c = 1, d.nclasses do
+        ranges[c] = {}
+    end
+    local lo = 0
+    for b = 1, 256 do
+        local c = d.classes[b]
+        if b == 256 or d.classes[b + 1] ~= c then
+            local list = ranges[c]
+            list[#list + 1] = {
+                lo,
+                b - 1,
+            }
+            lo = b
+        end
+    end
+    return ranges
+end
+
+--- add_automaton connects from to to through a copy of the deterministic
+--- automaton of an automaton node (a DFA without dispatch states).
+--- @param m table
+--- @param from integer
+--- @param to integer
+--- @param node table { automaton, ranges }
+local function add_automaton(m, from, to, node)
+    local d = node.automaton
+    local ranges = node.ranges
+    if not ranges then
+        ranges = class_ranges(d)
+        node.ranges = ranges
+    end
+    local states = {}
+    for s = 1, d.nstates do
+        states[s] = new_state(m)
+    end
+    add_eps(m, from, states[1])
+    local nclasses, trans = d.nclasses, d.trans
+    for s = 1, d.nstates do
+        for c = 1, nclasses do
+            local t = trans[(s - 1) * nclasses + c]
+            if t ~= 0 then
+                for _, range in ipairs(ranges[c]) do
+                    add_edge(m, states[s], range[1], range[2], states[t])
+                end
+            end
+        end
+        if d.accept[s] ~= 0 then
+            add_eps(m, states[s], to)
+        end
+    end
+end
+
 --- in_chain returns true if name is in the linked list of fragments being
 --- expanded.
 --- @param chain table? { name, parent }
@@ -470,6 +529,10 @@ local function compile_task(m, task, stack, fragments)
             e,
             chain,
         }
+    elseif t == 'lookahead' and m.ignore_lookaheads then
+        add_eps(m, from, to)
+    elseif t == 'automaton' then
+        add_automaton(m, from, to, node)
     elseif t == 'lookahead' then
         if not m.preds then
             error('lookahead without a predicate registry', 0)
@@ -523,9 +586,11 @@ end
 --- @param fragments table
 --- @param max_states integer
 --- @param preds table? predicate registry
+--- @param ignore_lookaheads boolean? true to match a lookahead as nothing
 --- @return table machine
-local function build_machine(defs, fragments, max_states, preds)
-    local m = new_builder(max_states, preds)
+local function build_machine(defs, fragments, max_states, preds,
+                             ignore_lookaheads)
+    local m = new_builder(max_states, preds, ignore_lookaheads)
     m.start = new_state(m)
     for _, def in ipairs(defs) do
         local s, acc = new_state(m), new_state(m)
@@ -539,24 +604,30 @@ local function build_machine(defs, fragments, max_states, preds)
     end
     m.max_states = nil
     m.preds = nil
+    m.ignore_lookaheads = nil
     return m
 end
 
 --- build returns the combined automaton of defs. Each definition is either
 --- { id, ast } or { id, literal, ignore_case }. Fragments are expanded
---- inline and must be acyclic. The lookaheads of the ASTs are registered in
---- preds, which is required when there are any.
+--- inline and must be acyclic; a fragment may be an automaton node
+--- { type = 'automaton', automaton } (a DFA without dispatch states, such
+--- as the intersection of the patterns of a fragment written as an array),
+--- which is copied in. The lookaheads of the ASTs are registered in preds,
+--- which is required when there are any, unless ignore_lookaheads is true:
+--- then a lookahead matches the empty string, whatever follows.
 --- @param defs table[]
 --- @param fragments table fragment name -> AST
 --- @param limits table? { max_states } for tests only; max_states defaults
 --- to MAX_STATES
 --- @param preds table? predicate registry (new_predicates)
+--- @param ignore_lookaheads boolean?
 --- @return table? machine { start, count, eps, geps, edges, accept }
 --- @return table? err { code = 'automaton_too_large', message }
-local function build(defs, fragments, limits, preds)
+local function build(defs, fragments, limits, preds, ignore_lookaheads)
     local max_states = get_limit(limits, 'max_states', MAX_STATES)
     local ok, res = pcall(build_machine, defs, fragments or {}, max_states,
-                          preds)
+                          preds, ignore_lookaheads)
     if ok then
         return res
     elseif res == TOO_LARGE then

@@ -285,16 +285,19 @@ local function add_error(diagnostics, code, segments, pos, message)
     }
 end
 
---- find_lookahead returns the first lookahead in ast, expanding the
---- fragments and captures it refers to: the position of the lookahead in
---- ast itself (or of the reference through which it is reached) and the
---- name of that fragment or capture, or nil.
+--- find_forbidden returns the first lookahead in ast, or the first
+--- reference to a fragment written as an array of patterns (which the
+--- fragments given to this module mark as a node of type 'staged'),
+--- expanding the fragments and captures it refers to: the position of the
+--- node in ast itself (or of the reference through which it is reached),
+--- the name of that fragment or capture, and the type of the node, or nil.
 --- @param ast table
 --- @param fragments table
 --- @param capdefs table capture name -> AST
 --- @return integer? pos
 --- @return string? through
-local function find_lookahead(ast, fragments, capdefs)
+--- @return string? type 'lookahead' or 'staged'
+local function find_forbidden(ast, fragments, capdefs)
     -- each item is { node, top-level position, name of the reference }
     local stack = {
         {
@@ -306,8 +309,8 @@ local function find_lookahead(ast, fragments, capdefs)
         local item = stack[#stack]
         stack[#stack] = nil
         local node = item[1]
-        if node.type == 'lookahead' then
-            return item[2] or node.pos, item[3]
+        if node.type == 'lookahead' or node.type == 'staged' then
+            return item[2] or node.pos, item[3], node.type
         elseif not seen[node] then
             seen[node] = true
             local kids = children(node, fragments, capdefs)
@@ -337,10 +340,12 @@ local function find_lookahead(ast, fragments, capdefs)
     return nil
 end
 
---- reject_lookahead reports a lookahead in ast, the pattern of the field at
+--- reject_forbidden reports a lookahead in ast, the pattern of the field at
 --- segments named label, and returns true if there is one: a delimited
 --- token table is matched by its open, then a search for its close, which
---- do not evaluate lookaheads.
+--- do not evaluate lookaheads. A fragment written as an array of patterns
+--- is reported likewise (invalid_reference): its later patterns are not
+--- checked here.
 --- @param diagnostics table[]
 --- @param ast table
 --- @param fragments table
@@ -348,15 +353,22 @@ end
 --- @param segments any[]
 --- @param label string
 --- @return boolean
-local function reject_lookahead(diagnostics, ast, fragments, capdefs, segments,
+local function reject_forbidden(diagnostics, ast, fragments, capdefs, segments,
                                 label)
-    local pos, through = find_lookahead(ast, fragments, capdefs)
+    local pos, through, kind = find_forbidden(ast, fragments, capdefs)
     if not pos then
         return false
     end
-    add_error(diagnostics, 'lookahead_not_allowed', segments, pos,
-              label .. ': a lookahead is not allowed in a delimited token' ..
-                  ' table' .. (through and ' (through ' .. through .. ')' or ''))
+    local via = through and ' (through ' .. through .. ')' or ''
+    if kind == 'staged' then
+        add_error(diagnostics, 'invalid_reference', segments, pos,
+                  label .. ': a fragment written as an array of patterns is' ..
+                      ' not allowed in a delimited token table' .. via)
+    else
+        add_error(diagnostics, 'lookahead_not_allowed', segments, pos, label ..
+                      ': a lookahead is not allowed in a delimited' ..
+                      ' token table' .. via)
+    end
     return true
 end
 
@@ -672,9 +684,9 @@ local function analyze(name, tbl, fragments, diagnostics, limits)
     local before = #diagnostics
     local a = new_analysis(name, tbl, fragments, diagnostics)
     a.limits = limits
-    local open_has = reject_lookahead(diagnostics, a.open, fragments, a.capdefs,
+    local open_has = reject_forbidden(diagnostics, a.open, fragments, a.capdefs,
                                       a.open_segments, a.label .. '.open')
-    local close_has = reject_lookahead(diagnostics, a.close, fragments,
+    local close_has = reject_forbidden(diagnostics, a.close, fragments,
                                        a.capdefs, a.close_segments,
                                        a.label .. '.close')
     if open_has or close_has then
@@ -737,7 +749,7 @@ local function analyze_prefixed(name, tbl, by_name, fragments, diagnostics)
     local label = 'tokens.' .. name .. '.prefix'
     local segments = triple('tokens', name, 'prefix')
     local prefix = parse(rawget(tbl, 'prefix'), 'tokens')
-    if reject_lookahead(diagnostics, prefix, fragments, {}, segments, label) then
+    if reject_forbidden(diagnostics, prefix, fragments, {}, segments, label) then
         return {}
     end
     local min, max = lengths(prefix, fragments, {})

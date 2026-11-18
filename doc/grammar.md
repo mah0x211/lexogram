@@ -108,7 +108,7 @@ The rule that the analysis starts with. It must name a rule, and the input must 
 
 ## tokens
 
-The tokens of the language, as a table from names to definitions. A definition is one of four forms: a pattern string, an array of patterns, a delimited token table, or a prefixed table. A name that starts with `_` is a fragment: a pattern that other token patterns refer to, which is not a token by itself; a fragment is a pattern string.
+The tokens of the language, as a table from names to definitions. A definition is one of four forms: a pattern string, an array of patterns, a delimited token table, or a prefixed table. A name that starts with `_` is a fragment: a pattern that other token patterns refer to, which is not a token by itself; a fragment is a pattern string or an [array of patterns](#arrays-of-patterns).
 
 ### Pattern tokens
 
@@ -145,6 +145,24 @@ tokens = {
 - Conflicts between tokens are checked with the first patterns. A later pattern that matches no non-empty string is an error (`unmatchable_pattern`); whether the first pattern and the later ones have a string in common is not checked.
 - Each later pattern is an automaton of its own, run only on the tokens of its kind: a condition that needs the product of two automata when written in one pattern (as a lookahead that holds over the whole token) costs no more than the two.
 - In a grammar that extends another, the marks work on the array as on any array: `['+number'] = { [[ ... ]] }` appends a check, `['-number'] = { [[ ... ]] }` removes one, and `['=number']` replaces the definition. A pattern string is not an array: to add a check to it, replace the token.
+
+A fragment can be written as an array of patterns too. It matches the strings that all its patterns match, wherever it is referred to: in a choice, in a sequence, in a repetition or in another fragment. Each form of a token can so carry its own rules, as the rules of a grammar such as ABNF are written:
+
+```lua
+tokens = {
+    -- at most three digits, with an exponent of one digit
+    _decimal = { [[ DIGIT+ ]], [[ DIGIT{1,3} ]] },
+    _exponent = { [[ "e" DIGIT+ ]], [[ "e" DIGIT ]] },
+    -- at most two hexadecimal digits
+    _hex = { [[ "0x" HEXDIGIT+ ]], [[ "0x" HEXDIGIT{1,2} ]] },
+    number = [[ (_hex | _decimal _exponent?) (?![0-9A-Za-z]) ]],
+}
+```
+
+- The token is chosen with the first pattern of each such fragment, so its kind and its end do not depend on the others: `1234` is one `number`, which is invalid, rather than a shorter token.
+- Then the whole text of the token must match its pattern with each such fragment taken as all its patterns, and its lookaheads left out (they were evaluated when the token was chosen). Through a choice, one alternative is enough: `0xff` matches `_hex`, and `12e3` matches `_decimal _exponent?`. A token that does not is invalid: `lexogram.tokenize` returns `kind, stop, 'invalid', 1`, before the later patterns of the token, if it has any, are tried.
+- The intersection of the patterns of a fragment is an automaton of its own, which only the checks of the tokens include: the token automaton has the first patterns only. A later pattern of a token, and the body of a lookahead, match such a fragment as all its patterns.
+- A fragment written as an array cannot hold a lookahead, also through another fragment (`lookahead_not_allowed`): write it in the token. A delimited token table or a prefixed table cannot refer to one (`invalid_reference`). A fragment whose patterns have no non-empty string in common is `unmatchable_pattern`.
 
 ### Delimited token tables
 
@@ -404,7 +422,7 @@ number = [[ DIGIT+ ("." DIGIT+)? (?![0-9A-Za-z_.]) ]],
 ```
 
 - `p` can be any pattern: choices, repetitions, fragments and nested lookaheads, of any length. Fragments still cannot be recursive, so a lookahead keeps the patterns regular.
-- Lookaheads are allowed in pattern tokens (in each pattern of an [array](#arrays-of-patterns)), fragments and leading tokens. In a delimited token table (`open`, `close`, `prefix`, a capture, also through a fragment) and in `rules` they are errors (`lookahead_not_allowed`); a repeated lookahead (`(?=A)*`) is `invalid_lookahead`.
+- Lookaheads are allowed in pattern tokens (in each pattern of an [array](#arrays-of-patterns)), fragments (not written as arrays) and leading tokens. In a delimited token table (`open`, `close`, `prefix`, a capture, also through a fragment) and in `rules` they are errors (`lookahead_not_allowed`); a repeated lookahead (`(?=A)*`) is `invalid_lookahead`.
 - A token is chosen by longest match, as below: at each length its lookaheads are evaluated, and the longest length at which the whole pattern holds is the match. In `[0-9]+ (?![a-z])`, the input `12a` gives the token `1`, which is followed by `2`, not a letter; write `(?![0-9a-z])` for "the whole run of digits, not followed by a letter".
 - Two pattern tokens conflict when they can match the same string at the same position with both lookaheads holding on the same input. A token cannot be preferred over another, so tokens that differ by a lookahead are written with complementary conditions (`(?=p)` and `(?!p)`).
 - Cost: a lookahead whose result is known after a bounded number of bytes is evaluated where needed; one without a bound (such as `(?="a"* "b")`) is computed for every position of the input once, from its end. `lexogram.parse` does this once per call; for repeated calls of `lexogram.tokenize` on one input, make an input of it once with `lexogram.input(source)` and pass that instead of the string (`tokenize(compiled, input, pos)`): the input holds the source with the values computed for it. Given a string, a lookahead without a bound is evaluated where it is needed, which may read up to the end of the input.
@@ -419,7 +437,7 @@ At a position of the source, the token is chosen in this order:
 4. Of a pattern token and a literal of the same length, the literal.
 5. A byte that starts no token is an `INVALID` token of one byte.
 
-A pattern token written as an [array of patterns](#arrays-of-patterns) is chosen by its first pattern; the others then check its text.
+A pattern token written as an [array of patterns](#arrays-of-patterns) is chosen by its first pattern, and a fragment written as an array by its first pattern too; the others then check its text.
 
 Two pattern tokens (or two leading tokens) that can match the same whole string are an error (with lookaheads, only when both can hold on the same input), and so are two opens of delimited tokens; the diagnostic shows the shortest such string. A pattern token that never wins, because a literal or a longer token always takes its strings, is warned about (`never_adopted`).
 

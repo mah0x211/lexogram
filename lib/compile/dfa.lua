@@ -703,6 +703,95 @@ local function build(machine, rank, limits)
     }
 end
 
+--- intersect returns the product of the automata of list (results of
+--- build without dispatch states): an automaton of the same shape that
+--- accepts a string, with accept 1, when every automaton of list accepts
+--- it. Only the state tuples reachable from the start are built.
+--- @param list table[]
+--- @param limits table? { max_states }; max_states defaults to MAX_STATES
+--- @return table? d { nstates, nclasses, classes, trans, accept }
+--- @return table? err automaton_too_large
+local function intersect(list, limits)
+    local max_states = get_limit(limits, 'max_states', MAX_STATES)
+    local n = #list
+    -- a class of the product for each distinct tuple of classes of a byte
+    local classes, reps, index = {}, {}, {}
+    local nclasses = 0
+    for b = 1, 256 do
+        local parts = {}
+        for i = 1, n do
+            parts[i] = list[i].classes[b]
+        end
+        local key = concat(parts, ',')
+        local c = index[key]
+        if not c then
+            nclasses = nclasses + 1
+            c = nclasses
+            index[key] = c
+            reps[c] = parts
+        end
+        classes[b] = c
+    end
+
+    local tuples, states, trans, accept = {}, {}, {}, {}
+    local start = {}
+    for i = 1, n do
+        start[i] = 1
+    end
+    tuples[1] = start
+    states[concat(start, ',')] = 1
+    local head = 1
+    while tuples[head] do
+        local t = tuples[head]
+        local accepts = 1
+        for i = 1, n do
+            if list[i].accept[t[i]] == 0 then
+                accepts = 0
+                break
+            end
+        end
+        accept[head] = accepts
+        for c = 1, nclasses do
+            local next_tuple = {}
+            for i = 1, n do
+                local d = list[i]
+                local x = d.trans[(t[i] - 1) * d.nclasses + reps[c][i]]
+                if x == 0 then
+                    next_tuple = nil
+                    break
+                end
+                next_tuple[i] = x
+            end
+            local target = 0
+            if next_tuple then
+                local key = concat(next_tuple, ',')
+                target = states[key]
+                if not target then
+                    if #tuples >= max_states then
+                        return nil, {
+                            code = 'automaton_too_large',
+                            message = 'the deterministic automaton would' ..
+                                ' have more than ' .. max_states .. ' states',
+                        }
+                    end
+                    tuples[#tuples + 1] = next_tuple
+                    target = #tuples
+                    states[key] = target
+                end
+            end
+            trans[(head - 1) * nclasses + c] = target
+        end
+        head = head + 1
+    end
+    return {
+        nstates = #tuples,
+        nclasses = nclasses,
+        classes = classes,
+        trans = trans,
+        accept = accept,
+    }
+end
+
 --- resolve_dispatch returns s, or the target of the dispatch state s for
 --- the values that valuate(preds, pos) gives (the valuation number).
 --- @param d table
@@ -770,6 +859,7 @@ end
 return {
     MAX_STATES = MAX_STATES,
     build = build,
+    intersect = intersect,
     run = run,
     longest = longest,
 }

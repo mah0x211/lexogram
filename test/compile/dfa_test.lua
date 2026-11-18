@@ -830,3 +830,58 @@ function testcase.build_raises_for_invalid_limits()
     })
     assert.match(err, 'limits.max_states must be a positive integer, got 0')
 end
+
+-- true if the automaton d accepts the whole string str
+local function accepts(d, str)
+    local s = dfa.run(d, str)
+    return s ~= 0 and d.accept[s] ~= 0
+end
+
+function testcase.intersect_accepts_what_every_automaton_accepts()
+    local list = {
+        (build1('[a-c]+')),
+        (build1('([a-c][a-c])+')),
+        (build1('[^b]*')),
+    }
+    local d = assert(dfa.intersect(list))
+    assert.is_nil(d.dispatch)
+    -- every string over a, b, c, d of length 0 to 4
+    local alphabet = {
+        'a',
+        'b',
+        'c',
+        'd',
+    }
+    local strings = {
+        '',
+    }
+    for _ = 1, 4 do
+        for i = #strings, 1, -1 do
+            local s = strings[i]
+            if #s == #strings[#strings] then
+                for _, c in ipairs(alphabet) do
+                    strings[#strings + 1] = s .. c
+                end
+            end
+        end
+    end
+    for _, s in ipairs(strings) do
+        local all = true
+        for _, a in ipairs(list) do
+            all = all and accepts(a, s)
+        end
+        assert.equal(accepts(d, s), all, s)
+    end
+
+    -- the limit of the states
+    local _, err = dfa.intersect({
+        (build1('([ab]{4})+')),
+        (build1('([ab]{5})+')),
+    }, {
+        max_states = 9,
+    })
+    assert.equal(err, {
+        code = 'automaton_too_large',
+        message = 'the deterministic automaton would have more than 9 states',
+    })
+end
