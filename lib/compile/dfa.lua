@@ -277,6 +277,11 @@ local function subset_construction(machine, class_of, nclasses, max_states)
         return s
     end
 
+    -- the state that each set of NFA states reached by a byte leads to, by
+    -- the key of the set: many classes of a state reach the same set, whose
+    -- closure is computed once
+    local reached = {}
+
     local initial = {}
     initial[1] = machine.start
     -- the start state always fits: max_states is at least 1
@@ -303,10 +308,17 @@ local function subset_construction(machine, class_of, nclasses, max_states)
             local buckets = moves(machine, sets[head], class_of)
             for c = 1, nclasses do
                 local target = 0
-                if buckets[c] then
-                    target = intern_pre(closure(machine, buckets[c]))
-                    if full then
-                        return nil
+                local bucket = buckets[c]
+                if bucket then
+                    sort(bucket)
+                    local key = concat(bucket, ',')
+                    target = reached[key]
+                    if not target then
+                        target = intern_pre(closure(machine, bucket))
+                        if full then
+                            return nil
+                        end
+                        reached[key] = target
                     end
                 end
                 row[c] = target
@@ -323,15 +335,17 @@ local function subset_construction(machine, class_of, nclasses, max_states)
     }
 end
 
---- minimize partitions the states with Moore's algorithm, starting from
---- the partition by accept set. Each round assigns every state a block by
---- its current block and the blocks of its targets; it stops when a round
---- does not split any block. Blocks are numbered by first appearance in
---- state order, so the result is deterministic. Complexity: O(n * k) per
---- round for n states and k classes, at most n rounds (O(n^2 * k) in the
---- worst case; few rounds in practice).
---- A dispatch state starts in a block of the dispatch states with the same
---- predicates, and is split by the blocks of its targets.
+--- minimize partitions the states with Hopcroft's algorithm, starting from
+--- the partition by key (the accept set, or the predicates of a dispatch
+--- state): it splits the blocks by the predecessors of a block on one
+--- symbol until no block splits, keeping only the smaller half of a split
+--- to split by. The symbols are the byte classes and, for a dispatch state,
+--- the indexes of its targets; a missing transition, or one to the dead
+--- state 0, goes to a dead state of its own block. The coarsest partition
+--- is unique, so the result is the same as that of the rounds of Moore's
+--- algorithm; blocks are numbered by first appearance in state order, so
+--- it is deterministic. Complexity: O(n * k * log n) for n states and k
+--- symbols.
 --- @param n integer
 --- @param trans table state -> class -> state
 --- @param keys string[] initial key of each state
@@ -340,55 +354,162 @@ end
 --- @return integer[] block state -> block
 --- @return integer nblocks
 local function minimize(n, trans, keys, nclasses, dispatch)
-    local block, nblocks = {}, 0
-    local index = {}
+    local dead = n + 1
+    local nsym = nclasses
+    for _, d in next, dispatch do
+        if nclasses + #d.targets > nsym then
+            nsym = nclasses + #d.targets
+        end
+    end
+
+    -- the predecessors of each state on each symbol, as linked lists:
+    -- head[(a - 1) * dead + t] is the first edge to t on a
+    local head, link, from = {}, {}, {}
+    local nedges = 0
+    for s = 1, n do
+        local d = dispatch[s]
+        local row, targets = trans[s], d and d.targets
+        for a = 1, nsym do
+            local t
+            if targets then
+                t = a > nclasses and targets[a - nclasses] or 0
+            else
+                t = a <= nclasses and row[a] or 0
+            end
+            if not t or t == 0 then
+                t = dead
+            end
+            nedges = nedges + 1
+            local h = (a - 1) * dead + t
+            from[nedges], link[nedges] = s, head[h]
+            head[h] = nedges
+        end
+    end
+    -- the dead state goes to itself on every symbol
+    for a = 1, nsym do
+        nedges = nedges + 1
+        local h = (a - 1) * dead + dead
+        from[nedges], link[nedges] = dead, head[h]
+        head[h] = nedges
+    end
+
+    -- blocks are ranges of elems: block b is elems[first[b] .. first[b] +
+    -- size[b] - 1]; place[s] is the index of s in elems
+    local elems, place, block_of, first, size = {}, {}, {}, {}, {}
+    local nblocks = 0
+    local index, members = {}, {}
     for s = 1, n do
         local b = index[keys[s]]
         if not b then
             nblocks = nblocks + 1
             b = nblocks
             index[keys[s]] = b
+            members[b] = {}
         end
-        block[s] = b
+        local list = members[b]
+        list[#list + 1] = s
+    end
+    nblocks = nblocks + 1
+    members[nblocks] = {
+        dead,
+    }
+    local at = 0
+    for b = 1, nblocks do
+        first[b], size[b] = at + 1, #members[b]
+        for _, s in ipairs(members[b]) do
+            at = at + 1
+            elems[at], place[s], block_of[s] = s, at, b
+        end
     end
 
-    while true do
-        local next_block, count = {}, 0
-        index = {}
-        local sig = {}
-        for s = 1, n do
-            sig[1] = block[s]
-            local d = dispatch[s]
-            local len
-            if d then
-                local targets = d.targets
-                len = #targets + 1
-                for j = 1, #targets do
-                    sig[j + 1] = block[targets[j]]
-                end
-            else
-                len = nclasses + 1
-                local row = trans[s]
-                for c = 1, nclasses do
-                    local t = row[c]
-                    sig[c + 1] = t == 0 and 0 or block[t]
-                end
-            end
-            local key = concat(sig, ',', 1, len)
-            local b = index[key]
-            if not b then
-                count = count + 1
-                b = count
-                index[key] = b
-            end
-            next_block[s] = b
-        end
-        block = next_block
-        if count == nblocks then
-            return block, nblocks
-        end
-        nblocks = count
+    -- the splitters (block, symbol) to process, and which are pending
+    local wblock, wsym, wtop = {}, {}, 0
+    local pending = {}
+    local function push(b, a)
+        wtop = wtop + 1
+        wblock[wtop], wsym[wtop] = b, a
+        pending[(b - 1) * nsym + a] = true
     end
+    for b = 1, nblocks do
+        for a = 1, nsym do
+            push(b, a)
+        end
+    end
+
+    local marked, touched, splitter = {}, {}, {}
+    while wtop > 0 do
+        local b, a = wblock[wtop], wsym[wtop]
+        wtop = wtop - 1
+        pending[(b - 1) * nsym + a] = nil
+        -- the members of b first: marking moves states inside their blocks,
+        -- b among them
+        local count = size[b]
+        for i = 1, count do
+            splitter[i] = elems[first[b] + i - 1]
+        end
+        -- mark the predecessors on a by moving them to the front of their
+        -- blocks (a state has one target on a, so it is marked once)
+        local ntouched = 0
+        local base = (a - 1) * dead
+        for i = 1, count do
+            local e = head[base + splitter[i]]
+            while e do
+                local s = from[e]
+                local y = block_of[s]
+                local m = marked[y]
+                if not m then
+                    m = 0
+                    ntouched = ntouched + 1
+                    touched[ntouched] = y
+                end
+                local p, q = place[s], first[y] + m
+                local other = elems[q]
+                elems[q], place[s] = s, q
+                elems[p], place[other] = other, p
+                marked[y] = m + 1
+                e = link[e]
+            end
+        end
+        -- split each block that has marked and unmarked states: the marked
+        -- ones become a new block
+        for j = 1, ntouched do
+            local y = touched[j]
+            local m = marked[y]
+            marked[y] = nil
+            if m < size[y] then
+                nblocks = nblocks + 1
+                local z = nblocks
+                first[z], size[z] = first[y], m
+                first[y], size[y] = first[y] + m, size[y] - m
+                for i = first[z], first[z] + m - 1 do
+                    block_of[elems[i]] = z
+                end
+                for c = 1, nsym do
+                    if pending[(y - 1) * nsym + c] then
+                        push(z, c)
+                    elseif size[z] <= size[y] then
+                        push(z, c)
+                    else
+                        push(y, c)
+                    end
+                end
+            end
+        end
+    end
+
+    -- number the blocks by first appearance in state order
+    local block, number, count = {}, {}, 0
+    for s = 1, n do
+        local b = block_of[s]
+        local r = number[b]
+        if not r then
+            count = count + 1
+            r = count
+            number[b] = r
+        end
+        block[s] = r
+    end
+    return block, count
 end
 
 --- renumber orders the blocks breadth-first from the start block, visiting
