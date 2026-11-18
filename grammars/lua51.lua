@@ -153,7 +153,7 @@
 --   unop              "-" | "not" | "#"
 --   binop             "+" | "-" | "*" | "/" | "^" | "%" | ".." | "<" | "<="
 --                     | ">" | ">=" | "==" | "~=" | "and" | "or"
---   suffixedexp       _primaryexp _suffix*: a variable, a call or a
+--   suffixedexp       _primaryexp _suffix*+: a variable, a call or a
 --                     parenthesized expression with its suffixes
 --   args              "(" explist? ")" | tableconstructor | string
 --                     | long_string | long_string_level
@@ -178,14 +178,14 @@
 --   _field            recfield | listfield
 --   _fieldsep         "," | ";"
 --
--- greedy
+-- Possessive repetitions
 --
--- The rules whose repetition goes on as long as the next token can
--- continue it, where the grammar would otherwise be ambiguous:
--- suffixedexp. A "(" after an expression is always read as call
--- arguments, even at the start of a line, as the parser of Lua 5.1 does
--- (it also reports such a call that starts a new line as ambiguous syntax;
--- see the differences below).
+-- The repetitions that go on as long as the next token can continue them,
+-- where the grammar would otherwise be ambiguous, are possessive (*+): the
+-- _suffix*+ of suffixedexp. A "(" after an expression is always read as
+-- call arguments, even at the start of a line, as the parser of Lua 5.1
+-- does (it also reports such a call that starts a new line as ambiguous
+-- syntax; see the differences below).
 --
 -- recover
 --
@@ -252,7 +252,7 @@
 --                            whose escapes are the consumer's to check
 --   x = 3e                   "malformed number"; the number 3 and the name
 --                            e, two exprstats
---   a = b, a new line, (f)() "ambiguous syntax"; a call b(f)() (greedy)
+--   a = b, a new line, (f)() "ambiguous syntax"; a call b(f)() (_suffix*+)
 --
 -- A consumer that needs the official behavior checks the event array: an
 -- exprstat must have "=" or end with args, and so on. Other differences:
@@ -418,8 +418,10 @@ return assert(require('lexogram.grammar')({
             | suffixedexp
         ]],
         -- a variable, a call or a parenthesized expression with its
-        -- suffixes; a "(" after it is always taken as call arguments
-        suffixedexp = [[ _primaryexp _suffix* ]],
+        -- suffixes; a "(" after it is always taken as call arguments, even
+        -- at the start of a line, as in the official parser (which reports
+        -- such a call that starts a new line as ambiguous syntax)
+        suffixedexp = [[ _primaryexp _suffix*+ ]],
         _primaryexp = [[ name | "(" exp ")" ]],
         _suffix = [[ "." name | "[" exp "]" | ":" name args | args ]],
         args = [[
@@ -440,11 +442,5 @@ return assert(require('lexogram.grammar')({
         recfield = [[ ("[" exp "]" | name) "=" exp ]],
         listfield = [[ exp ]],
         _fieldsep = [[ "," | ";" ]],
-    },
-    -- a "(" after an expression starts call arguments even at the start of
-    -- a line, as in the official parser (which reports such a call that
-    -- starts a new line as ambiguous syntax)
-    greedy = {
-        'suffixedexp',
     },
 }))

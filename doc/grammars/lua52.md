@@ -87,9 +87,7 @@ A block is any number of statements and a final `return`: `break` becomes an ord
 
 An empty statement is a `;` token directly inside `block`, as a `;` after a statement is in `lua51`; the parser of Lua 5.2 does not make a node for it either.
 
-## greedy
-
-`suffixedexp`, as in `lua51`. A `(` after an expression is always read as call arguments, even at the start of a line; unlike Lua 5.1, the parser of Lua 5.2 does the same without an error.
+A `(` after an expression is always read as call arguments, even at the start of a line (the possessive `_suffix*+` of `suffixedexp`, as in `lua51`); unlike Lua 5.1, the parser of Lua 5.2 does the same without an error.
 
 ## recover
 

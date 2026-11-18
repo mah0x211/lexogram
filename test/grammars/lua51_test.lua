@@ -338,7 +338,8 @@ end
 
 function testcase.a_parenthesis_after_an_expression_is_a_call()
     -- as in the official parser, the "(" on the next line continues the
-    -- expression as call arguments (greedy, declared in the grammar)
+    -- expression as call arguments (the possessive _suffix*+ of
+    -- suffixedexp)
     local b = block('a = b\n(f)()')
 
     assert.equal(rule_names(b), {

@@ -32,8 +32,8 @@ local AGREE = {
 -- break outside a loop, "..." outside a vararg function, a decimal escape
 -- above 255), tokens that the official lexer rejects as a whole (a
 -- malformed number), goto read as two expression statements, and a "("
--- that starts a line after an expression (greedy, where the official
--- parser reports ambiguous syntax)
+-- that starts a line after an expression (the possessive _suffix*+ of
+-- suffixedexp, where the official parser reports ambiguous syntax)
 local WIDER = {
     'ambiguous_call',
     'break_outside',

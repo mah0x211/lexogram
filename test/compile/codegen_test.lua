@@ -375,7 +375,7 @@ function testcase.generate_records_second_token_decisions()
     assert.is_false(accepts(compiled, '{ name , }'))
 end
 
-function testcase.generate_runs_greedy_and_ordered_choices()
+function testcase.generate_runs_possessive_repetitions_and_ordered_choices()
     local compiled = compiled_of(grammar({
         keywords = {
             'if',
@@ -387,19 +387,16 @@ function testcase.generate_runs_greedy_and_ordered_choices()
             '(',
             ')',
         },
-        greedy = {
-            'stat',
-        },
         rules = {
             s = 'stat*',
-            stat = '"if" name "then" stat ("else" stat)? | call',
+            stat = '"if" name "then" stat ("else" stat)?+ | call',
             call = 'name "=" name / name "(" ")"',
         },
     }))
 
     assert.is_true(accepts(compiled, ''))
     assert.is_true(accepts(compiled, 'if name then name ( ) else name = name'))
-    -- greedy: the else belongs to the inner if, and both parse
+    -- possessive: the else belongs to the inner if, and both parse
     assert.is_true(accepts(compiled,
                            'if name then if name then name ( ) else name ( )'))
     -- the ordered choice backtracks from the first alternative

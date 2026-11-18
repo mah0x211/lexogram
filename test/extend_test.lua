@@ -144,11 +144,11 @@ function testcase.extend_enters_tables_and_edits_settings()
     assert.equal(grammar.tokens.block.open, '"<<"')
     -- an empty table field exists although the base has none
     assert.equal(extend(base(), {
-        ['=greedy'] = {
+        ['=recover'] = {
             'chunk',
         },
-        recover = {},
-    }).greedy, {
+        leading = {},
+    }).recover, {
         'chunk',
     })
 end

@@ -23,7 +23,6 @@ local result, err = lexogram.parse(compiled, source)
 - [skip](#skip)
 - [leading](#leading)
 - [rules](#rules)
-- [greedy](#greedy)
 - [recover](#recover)
 - [extends](#extends)
 - [Mixins](#mixins): `mixin`, `embeds`
@@ -86,7 +85,6 @@ return assert(require('lexogram.grammar')({
 | `skip` | | array of token names | Tokens skipped between the elements of the rules |
 | `leading` | | array of pattern token names | Tokens tried at the start of the input only |
 | `rules` | yes | table | Name → pattern |
-| `greedy` | | array of rule names | Rules whose repetitions are greedy by intent |
 | `recover` | | array of rule names | Rules to recover in after a syntax error (not implemented yet) |
 | `extends` | | grammar name | The grammar this one is a difference of; resolved by `lexogram.load` |
 | `embeds` | | array of mixin names | The [mixins](#mixins) applied after the base; needs `extends` |
@@ -210,10 +208,6 @@ The syntax, as a table from names to patterns (see [Patterns](#patterns)). A rul
 - Rules may be recursive, but a rule that reaches itself without consuming a token (left recursion) is an error.
 - Expressions are written flat, without precedence: `expr = [[ unop* operand (binop unop* operand)* ]]`; a consumer applies the precedence of its language.
 
-## greedy
-
-The rules where a repetition (`?`, `*`, `+`) cannot tell from two tokens of lookahead whether to take one more element or to go on, and where the greedy choice (take the element) is the intended one. Declaring them confirms that intent: a rule with such a spot that is not in `greedy` is warned about (`undeclared_greedy`), and a rule in `greedy` without one too (`unneeded_greedy`). See [How rules are applied](#how-rules-are-applied).
-
 ## recover
 
 The rules to recover in after a syntax error: the error would be replaced by an `ERROR` span covering the rule, and the analysis would go on. **Error recovery is not implemented yet**: the field is checked, but the first syntax error stops the analysis.
@@ -266,7 +260,7 @@ rules = { ['=_stat'] = [[ ... | gotostat ]] },  -- replace a rule
 tokens = { ['--long_string'] = { 'nest' } },    -- remove a setting of a token
 ```
 
-- The target `X` must exist in the base. The top-level table fields (`tokens`, `rules`, `symbols`, `keywords`, `skip`, `leading`, `greedy`, `recover`) exist as empty tables when the base has none.
+- The target `X` must exist in the base. The top-level table fields (`tokens`, `rules`, `symbols`, `keywords`, `skip`, `leading`, `recover`) exist as empty tables when the base has none.
 - In one table, removals (`-`, `--`) are applied first, then replacements and entered tables (`=`, unmarked), then additions (`+`, `++`). `=X` and `X` together are an error.
 - `extends`, `embeds`, `mixin`, `lexogram`, `name` and `version` are written without a mark. `lexogram` is inherited when it is not written; `name` and `version` are not inherited, so that a derived grammar never keeps the name of its base. `start` is replaced with `['=start']`.
 - An error of the merge is returned by `lexogram.load` as `nil, "<file>: <path>: <reason>"`.
@@ -318,7 +312,7 @@ return {
 pattern  = choice
 choice   = sequence ("|" sequence)* | sequence ("/" sequence)*
 sequence = repeat+
-repeat   = primary ("?" | "*" | "+")?
+repeat   = primary (("?" | "*" | "+") "+"?)?
 primary  = literal | class | name | "(" choice ")"
 ```
 
@@ -331,9 +325,10 @@ primary  = literal | class | name | "(" choice ")"
 | `A \| B` | Choice, independent of order | yes | yes |
 | `A / B` | Ordered choice (tried in order) | no | yes |
 | `A?`, `A*`, `A+` | Optional, zero or more, one or more | yes | yes |
+| `A?+`, `A*+`, `A++` | The same, possessive: the greedy choice is intended where it is ambiguous (see [How rules are applied](#how-rules-are-applied)) | no | yes |
 | `(A)` | Grouping | yes | yes |
 
-- Postfix operators bind tighter than sequences, and sequences tighter than choices. `|` and `/` cannot be mixed in one choice; group one of them with parentheses.
+- Postfix operators bind tighter than sequences (the `+` of a possessive operator follows the operator directly, without white space), and sequences tighter than choices. `|` and `/` cannot be mixed in one choice; group one of them with parentheses.
 - White space outside quotes and brackets is ignored. Patterns are written in Lua long brackets (`[[ ... ]]`), where the escapes of Lua do not apply; a pattern that contains `]]` is written in `[=[ ... ]=]`.
 - Escapes in literals and classes: `\\`, `\"`, `\n`, `\r`, `\t`, `\xHH` (one byte) and `\u{H...}` (a code point); in classes also `\]`, `\-` and `\^`. Other punctuation is reserved for later operators and is an error.
 - Parentheses nest at most 100 deep.
@@ -366,7 +361,7 @@ Two pattern tokens (or two leading tokens) that can match the same whole string 
 The analysis is deterministic and looks at most two tokens ahead (skipped tokens are not counted).
 
 - **Choice `|`**: the alternatives must be told apart by the next two tokens; otherwise it is an error (`ambiguous_choice`). As long as they can be told apart, their order does not matter.
-- **Repetition `?`, `*`, `+`**: greedy. When the next tokens can start the element, the element is taken. Where they could also follow the repetition, the greedy choice decides the result; such a rule is declared in `greedy`.
+- **Repetition `?`, `*`, `+`**: greedy, without backtracking. When the next tokens can start the element, the element is taken. Where two tokens of lookahead cannot tell whether to take the element or to go on, the repetition is ambiguous: that is an error (`ambiguous_repetition`), as for a choice, unless the repetition is written possessive (`?+`, `*+`, `++`), which declares that the greedy choice is intended. A possessive repetition parses the same way; one that is not ambiguous is warned about (`unneeded_possessive`). For example, in `name* name?` the `name?` can never match, which is likely a mistake and is reported; a grammar that means it writes `name*+ name?`.
 - **Ordered choice `/`** (rules only): the first alternative is tried; if a syntax error occurs inside it, the input and the events are rewound to its start and the next alternative is tried. Once an alternative succeeds it is kept, even if a later part fails. When the next token cannot start an alternative, it is not tried. The overlap of the alternatives is not checked: their order decides. Nested trials can cost much time; use them only where two tokens cannot decide.
 - **Syntax errors**: the analysis stops with `nil` and `{ code, pos, line, column, expected, actual, message }`.
 
@@ -390,8 +385,8 @@ The compilation also rejects a repetition of an element that can match nothing (
 | Kind | Codes |
 |---|---|
 | Structure | `invalid_type`, `missing_field`, `unknown_field`, `invalid_key`, `invalid_value`, `invalid_version`, `version_too_new`, `version_too_old`, `empty_item`, `duplicate_item`, `reserved_item`, `invalid_name`, `reserved_name`, `duplicate_name`, `undefined_reference`, `invalid_reference`, `undeclared_literal` |
-| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
+| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
 | Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `automaton_too_large` |
-| Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice` |
-| Warnings | `never_adopted`, `undeclared_greedy`, `unneeded_greedy`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
+| Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice`, `ambiguous_repetition` |
+| Warnings | `never_adopted`, `unneeded_possessive`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
 | Warnings of the merge | `already_defined` (a [mixin](#mixins) adds what exists; returned by `lexogram.load`, `lexogram.merge` and `lexogram.grammar`, with the mixin as `source`) |

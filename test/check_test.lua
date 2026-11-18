@@ -140,7 +140,6 @@ function testcase.check_reports_wrong_field_types_without_inner_checks()
         symbols = true,
         keywords = 1,
         skip = 'a',
-        greedy = 1,
         recover = false,
     }), {
         err('invalid_type', 'lexogram', 'lexogram must be string, got number'),
@@ -152,7 +151,6 @@ function testcase.check_reports_wrong_field_types_without_inner_checks()
         err('invalid_type', 'keywords', 'keywords must be table, got number'),
         err('invalid_type', 'skip', 'skip must be table, got string'),
         err('invalid_type', 'rules', 'rules must be table, got number'),
-        err('invalid_type', 'greedy', 'greedy must be table, got number'),
         err('invalid_type', 'recover', 'recover must be table, got boolean'),
     })
 end
@@ -160,6 +158,10 @@ end
 function testcase.check_reports_unknown_top_level_fields()
     local grammar = valid_grammar()
     grammar.foo = 1
+    -- greedy was replaced by possessive repetitions (?+, *+, ++)
+    grammar.greedy = {
+        'expr',
+    }
     grammar['a b'] = 1
     grammar.Tokens = 1
     grammar[1] = 1
@@ -173,6 +175,7 @@ function testcase.check_reports_unknown_top_level_fields()
         err('unknown_field', 'Tokens', 'unknown field Tokens'),
         err('unknown_field', '["a b"]', 'unknown field ["a b"]'),
         err('unknown_field', 'foo', 'unknown field foo'),
+        err('unknown_field', 'greedy', 'unknown field greedy'),
         err('unknown_field', '[-2.5]', 'unknown field [-2.5]'),
         err('unknown_field', '[1]', 'unknown field [1]'),
         err('unknown_field', '[false]', 'unknown field [false]'),
@@ -447,17 +450,15 @@ function testcase.check_skips_cross_duplicates_without_both_tables()
     assert.equal(check.check(grammar), {})
 end
 
--- skip, greedy and recover
+-- skip and recover
 
 function testcase.check_reports_name_list_problems()
     local kinds = {
         skip = 'token',
-        greedy = 'rule',
         recover = 'rule',
     }
     for _, name in ipairs({
         'skip',
-        'greedy',
         'recover',
     }) do
         assert.equal(check.check(grammar_with({
@@ -773,7 +774,6 @@ end
 function testcase.check_does_not_trigger_metamethods()
     local grammar = valid_grammar()
     -- optional fields are absent so that a missing key would hit __index
-    grammar.greedy = nil
     grammar.recover = nil
     for _, name in ipairs({
         'tokens',
@@ -1143,9 +1143,8 @@ function testcase.check_reports_skip_references()
     })
 end
 
-function testcase.check_reports_greedy_and_recover_references()
+function testcase.check_reports_recover_references()
     for _, name in ipairs({
-        'greedy',
         'recover',
     }) do
         assert.equal(check.check(names_grammar({
@@ -1189,9 +1188,6 @@ function testcase.check_counts_invalid_definitions_as_defined()
         skip = {
             'WS',
         },
-        greedy = {
-            'a b',
-        },
         -- an undefined name is reported whatever its shape
         recover = {
             'NOPE',
@@ -1227,10 +1223,6 @@ function testcase.check_treats_duplicate_name_as_both_kinds()
             'x',
             '_f',
         },
-        greedy = {
-            'x',
-            '_f',
-        },
     })), {
         err('invalid_reference', 'skip[2]', 'skip[2] refers to "_f", ' ..
                 'which is a fragment and a rule, not a token'),
@@ -1251,14 +1243,12 @@ function testcase.check_names_pass_tolerates_malformed_fields()
         tokens = 'x',
         rules = 1,
         skip = 'a',
-        greedy = 1,
         recover = true,
     }), {
         err('invalid_type', 'start', 'start must be string, got table'),
         err('invalid_type', 'tokens', 'tokens must be table, got string'),
         err('invalid_type', 'skip', 'skip must be table, got string'),
         err('invalid_type', 'rules', 'rules must be table, got number'),
-        err('invalid_type', 'greedy', 'greedy must be table, got number'),
         err('invalid_type', 'recover', 'recover must be table, got boolean'),
     })
 
@@ -1269,9 +1259,6 @@ function testcase.check_names_pass_tolerates_malformed_fields()
         version = '1.0.0',
         start = 'nope',
         skip = {
-            'nope',
-        },
-        greedy = {
             'nope',
         },
     }), {

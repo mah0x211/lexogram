@@ -68,10 +68,6 @@ A local variable may have an attribute, `<const>` or `<close>`, as in the parser
 
 `namelist` stays for the generic `for`, whose names cannot have attributes; neither can the name of a `local function`.
 
-## greedy
-
-`suffixedexp`, as in `lua53`.
-
 ## recover
 
 None, as in `lua53`: the first syntax error stops the analysis.

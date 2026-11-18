@@ -79,10 +79,6 @@ Two rules are replaced, for the new operators; the other rules are those of [`lu
 | `unop` | `"-" \| "not" \| "#" \| "~"` | replaced |
 | `binop` | `"+" \| "-" \| "*" \| "/" \| "//" \| "^" \| "%" \| "&" \| "~" \| "\|" \| ">>" \| "<<" \| ".." \| "<" \| "<=" \| ">" \| ">=" \| "==" \| "~=" \| "and" \| "or"` | replaced |
 
-## greedy
-
-`suffixedexp`, as in `lua52`.
-
 ## recover
 
 None, as in `lua52`: the first syntax error stops the analysis.

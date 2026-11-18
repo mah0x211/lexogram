@@ -77,8 +77,7 @@ local ROOT_ORDER = {
     skip = 8,
     leading = 9,
     rules = 10,
-    greedy = 11,
-    recover = 12,
+    recover = 11,
 }
 -- Required fields of a delimited token table.
 local DELIMITERS = {
@@ -591,7 +590,7 @@ local function check_item_list(ctx, segments, tbl)
     }
 end
 
---- check_name_list checks skip, greedy or recover.
+--- check_name_list checks skip, leading or recover.
 --- @param ctx table
 --- @param segments any[]
 --- @param tbl table
@@ -705,11 +704,6 @@ local FIELDS = {
         name = 'rules',
         type = 'table',
         check = check_rules,
-    },
-    {
-        name = 'greedy',
-        type = 'table',
-        check = check_name_list,
     },
     {
         name = 'recover',
@@ -988,8 +982,8 @@ local function check_leading_references(ctx, tokens)
 end
 
 --- check_names checks definition names, the shared namespace of tokens and
---- rules, capture names and the plain references in start, skip, leading,
---- greedy and recover. Malformed fields, keys and items are skipped
+--- rules, capture names and the plain references in start, skip, leading
+--- and recover. Malformed fields, keys and items are skipped
 --- silently; the structure pass reports them. References are not checked
 --- unless both tokens and rules are tables.
 --- @param ctx table
@@ -1020,7 +1014,6 @@ local function check_names(ctx)
     check_reference_list(ctx, 'skip', 'token')
     check_reference_list(ctx, 'leading', 'token')
     check_leading_references(ctx, tokens)
-    check_reference_list(ctx, 'greedy', 'rule')
     check_reference_list(ctx, 'recover', 'rule')
 end
 

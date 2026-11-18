@@ -128,7 +128,7 @@ Rules with events (an ENTER and an EXIT around their range):
 | `exp` | `unop* _simpleexp (binop unop* _simpleexp)*`: terms and operators in order, without precedence |
 | `unop` | `"-" \| "not" \| "#"` |
 | `binop` | `"+" \| "-" \| "*" \| "/" \| "^" \| "%" \| ".." \| "<" \| "<=" \| ">" \| ">=" \| "==" \| "~=" \| "and" \| "or"` |
-| `suffixedexp` | `_primaryexp _suffix*`: a variable, a call or a parenthesized expression with its suffixes |
+| `suffixedexp` | `_primaryexp _suffix*+`: a variable, a call or a parenthesized expression with its suffixes |
 | `args` | `"(" explist? ")" \| tableconstructor \| string \| long_string \| long_string_level` |
 | `functiondef` | `"function" body` |
 | `body` | `"(" parlist? ")" block "end"` |
@@ -149,9 +149,7 @@ Rules without events (their names start with `_`; their contents belong to the e
 | `_field` | `recfield \| listfield` |
 | `_fieldsep` | `"," \| ";"` |
 
-## greedy
-
-The rules whose repetition goes on as long as the next token can continue it, where the grammar would otherwise be ambiguous: `suffixedexp`. A `(` after an expression is always read as call arguments, even at the start of a line, as the parser of Lua 5.1 does (it also reports such a call that starts a new line as ambiguous syntax; see the differences below).
+**Possessive repetition**: the `_suffix*+` of `suffixedexp` goes on as long as the next token can continue it, where the grammar would otherwise be ambiguous (see [How rules are applied](../grammar.md#how-rules-are-applied)). A `(` after an expression is always read as call arguments, even at the start of a line, as the parser of Lua 5.1 does (it also reports such a call that starts a new line as ambiguous syntax; see the differences below).
 
 ## recover
 
@@ -198,7 +196,7 @@ The grammars accept every source that Lua 5.1 accepts, and some that it rejects.
 | `function f() return ... end` | `cannot use '...' outside a vararg function` | `...` as an expression |
 | `x = "\300"` | `escape sequence too large` | a `string` token; the value of an escape is the consumer's to check |
 | `x = 3e` | `malformed number near '3e'` | the number `3` and the name `e`, two `exprstat`s |
-| `a = b` + new line + `(f)()` | `ambiguous syntax (function call x new statement)` | a call `b(f)()` (`greedy`) |
+| `a = b` + new line + `(f)()` | `ambiguous syntax (function call x new statement)` | a call `b(f)()` (`_suffix*+`) |
 
 A consumer that needs the official behavior checks the event array: an `exprstat` must have `=` or end with `args`, and so on.
 

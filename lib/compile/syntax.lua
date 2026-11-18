@@ -40,7 +40,10 @@
 --     also follow the element (exit), only on a second token b of second.
 --     greedy is set when some 2-token string both enters and exits: the
 --     runtime enters (greedy); the key (see lexogram.compile.ll) is an
---     example string.
+--     example string. Such a repetition must be possessive (?+, *+, ++),
+--     which declares that the greedy choice is intended; otherwise it is
+--     the error ambiguous_repetition. A possessive repetition that is not
+--     ambiguous is warned about (unneeded_possessive).
 local next = next
 local rawget = rawget
 local ipairs = ipairs
@@ -429,9 +432,17 @@ local function ordered_decision(ctx, node, conts)
     }
 end
 
+-- The operator of each repetition node type.
+local OPERATORS = {
+    opt = '?',
+    star = '*',
+    plus = '+',
+}
+
 --- repeat_decision computes the decision of an opt, star or plus node,
---- reports a repeated element that can match the empty string and records
---- greedy spots.
+--- reports a repeated element that can match the empty string and an
+--- ambiguous repetition that is not possessive, and records a possessive
+--- repetition that is not ambiguous.
 --- @param ctx table
 --- @param name string
 --- @param node table
@@ -440,11 +451,14 @@ end
 local function repeat_decision(ctx, name, node, conts)
     local a = ctx.analysis
     local item = node.item
-    if node.type ~= 'opt' and ll.first(a, {
+    -- a repetition of a nullable element is also ambiguous; only the cause
+    -- is reported, and the ambiguity of the repetition is not
+    local nullable = node.type ~= 'opt' and ll.first(a, {
         item,
     }, 1, {
         [EPS] = true,
-    })[EPS] then
+    })[EPS]
+    if nullable then
         add_diagnostic(ctx, 'error', 'nullable_repetition', pair('rules', name),
                        node.pos, 'rules.' .. name .. ': the repeated element' ..
                            ' can match the empty string')
@@ -468,12 +482,25 @@ local function repeat_decision(ctx, name, node, conts)
         second[t] = map
     end
     local greedy = smallest(intersect(enter2, conts[node][2]))
-    if greedy then
-        local spots = ctx.greedy_spots
-        spots[#spots + 1] = {
+    local operator = OPERATORS[node.type]
+    local what = node.type == 'opt' and 'optional element' or 'repetition'
+    if not nullable and greedy and not node.possessive then
+        add_diagnostic(ctx, 'error', 'ambiguous_repetition',
+                       pair('rules', name), node.pos,
+                       'rules.' .. name .. ': the ' .. what ..
+                           (node.type == 'opt' and
+                               ' can both be taken and skipped' or
+                               ' can both continue and end') .. ' with ' ..
+                           render(ctx.names_of, greedy) ..
+                           '; rewrite the rule, or write ' .. operator ..
+                           '+ to always take the element')
+    elseif not nullable and node.possessive and not greedy then
+        local unneeded = ctx.unneeded
+        unneeded[#unneeded + 1] = {
             rule = name,
             node = node,
-            example = greedy,
+            message = 'rules.' .. name .. ': ' .. operator .. '+ is not' ..
+                ' needed: the ' .. what .. ' is never ambiguous',
         }
     end
     return {
@@ -505,39 +532,14 @@ local function compute_decisions(ctx)
     return decisions
 end
 
---- check_greedy warns about greedy spots in rules not listed in greedy
---- and rules listed in greedy without a greedy spot.
+--- warn_unneeded warns about the possessive repetitions that are not
+--- ambiguous. It runs only for a grammar without errors, since warnings
+--- are reported only then.
 --- @param ctx table
-local function check_greedy(ctx)
-    local listed = {}
-    local greedy = rawget(ctx.grammar, 'greedy')
-    local list = type(greedy) == 'table' and greedy or {}
-    for i = 1, #list do
-        listed[rawget(list, i)] = i
-    end
-    local has_spot = {}
-    for _, spot in ipairs(ctx.greedy_spots) do
-        has_spot[spot.rule] = true
-        if not listed[spot.rule] then
-            add_diagnostic(ctx, 'warning', 'undeclared_greedy',
-                           pair('rules', spot.rule), spot.node.pos,
-                           'rules.' .. spot.rule .. ': the ' ..
-                               (spot.node.type == 'opt' and
-                                   'optional element can both be taken and' ..
-                                   ' skipped' or
-                                   'repetition can both continue and end') ..
-                               ' with ' .. render(ctx.names_of, spot.example) ..
-                               '; rewrite the rule or add ' .. spot.rule ..
-                               ' to greedy to always take the element')
-        end
-    end
-    for i = 1, #list do
-        local name = rawget(list, i)
-        if not has_spot[name] then
-            add_diagnostic(ctx, 'warning', 'unneeded_greedy', pair('greedy', i),
-                           nil, 'greedy[' .. i .. '] ' .. quote(name) ..
-                               ' has no greedy repetition')
-        end
+local function warn_unneeded(ctx)
+    for _, u in ipairs(ctx.unneeded) do
+        add_diagnostic(ctx, 'warning', 'unneeded_possessive',
+                       pair('rules', u.rule), u.node.pos, u.message)
     end
 end
 
@@ -568,7 +570,7 @@ local function analyze(grammar, lexer_result)
         terminal = terminal,
         names_of = names_of,
         diagnostics = {},
-        greedy_spots = {},
+        unneeded = {},
     }
     check_skipped(ctx)
     ctx.analysis = ll.analyze(rules, rawget(grammar, 'start'), terminal)
@@ -579,7 +581,7 @@ local function analyze(grammar, lexer_result)
     if has_error(ctx) then
         return nil, ctx.diagnostics
     end
-    check_greedy(ctx)
+    warn_unneeded(ctx)
     return {
         analysis = ctx.analysis,
         rules = rules,

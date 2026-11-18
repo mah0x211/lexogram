@@ -24,8 +24,10 @@
 -- { pos, code, message } tables and argument errors are raised. The 'tokens'
 -- context allows character classes, builtin classes and fragment references;
 -- the 'rules' context allows references to any non-reserved name and ordered
--- choice instead. In the 'tokens' context, the names of the captures of a
--- delimited token table may also be given; they resolve to capture nodes.
+-- choice and possessive repetitions (?+, *+, ++: the node of the repetition
+-- has possessive = true) instead. In the 'tokens' context, the names of the
+-- captures of a delimited token table may also be given; they resolve to
+-- capture nodes.
 -- Groups may be nested at most MAX_NESTING levels deep (nesting_too_deep).
 local type = type
 local error = error
@@ -694,6 +696,19 @@ local function reject_class(_, pos)
          'character class is not allowed in this context')
 end
 
+--- reject_possessive rejects a possessive repetition in a context without
+--- them.
+--- @param _ table parser state
+--- @param pos integer position of the "+" after the postfix operator
+local function reject_possessive(_, pos)
+    fail(pos, 'possessive_not_allowed',
+         'possessive repetition (?+, *+, ++) is not allowed in this context')
+end
+
+--- accept_possessive accepts a possessive repetition.
+local function accept_possessive()
+end
+
 --- reject_ordered_choice rejects "/" in a context without ordered choice.
 --- @param _ table parser state
 --- @param pos integer
@@ -710,17 +725,20 @@ local function accept_ordered_choice(p, pos)
 end
 
 -- Context dependent behavior. Each context defines how names resolve, how a
--- class ("[") is handled and how "/" is handled.
+-- class ("[") is handled, how "/" is handled and whether a possessive
+-- repetition is allowed.
 local CONTEXTS = {
     tokens = {
         resolve_name = resolve_tokens_name,
         scan_class = scan_class,
         on_slash = reject_ordered_choice,
+        on_possessive = reject_possessive,
     },
     rules = {
         resolve_name = resolve_rules_name,
         scan_class = reject_class,
         on_slash = accept_ordered_choice,
+        on_possessive = accept_possessive,
     },
 }
 
@@ -817,8 +835,9 @@ local function parse_group(p)
     return node
 end
 
---- parse_repeat parses a primary with an optional postfix operator. It
---- returns nil if the current token cannot start a primary.
+--- parse_repeat parses a primary with an optional postfix operator, which a
+--- "+" right after it makes possessive (?+, *+, ++). It returns nil if the
+--- current token cannot start a primary.
 --- @param p table parser state
 --- @return table? node
 local function parse_repeat(p)
@@ -839,6 +858,12 @@ local function parse_repeat(p)
             pos = node.pos,
             item = node,
         }
+        -- p.pos is the position right after the postfix operator
+        if byte(p.src, p.pos) == PLUS then
+            p.context.on_possessive(p, p.pos)
+            node.possessive = true
+            p.pos = p.pos + 1
+        end
         advance(p)
         if POSTFIX[p.kind] then
             fail(p.tpos, 'repeated_postfix',

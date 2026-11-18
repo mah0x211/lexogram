@@ -1163,7 +1163,7 @@ function testcase.parse_returns_repeated_postfix()
             'repeated_postfix',
         },
         {
-            '"a"?+',
+            '"a"+*',
             5,
             'repeated_postfix',
         },
@@ -1171,6 +1171,58 @@ function testcase.parse_returns_repeated_postfix()
             '"a" * ?',
             7,
             'repeated_postfix',
+        },
+    })
+end
+
+function testcase.parse_reads_possessive_repetitions_in_rules()
+    for _, case in ipairs({
+        {
+            'a?+',
+            'opt',
+        },
+        {
+            'a*+',
+            'star',
+        },
+        {
+            'a++',
+            'plus',
+        },
+    }) do
+        local ast = parse_ok(case[1], 'rules')
+        assert.equal(ast.type, case[2])
+        assert.is_true(ast.possessive)
+        assert.equal(ast.item.name, 'a')
+    end
+    -- a group, and the next element after a possessive repetition
+    local ast = parse_ok('(a b)*+ c', 'rules')
+    assert.equal(ast.items[1].type, 'star')
+    assert.is_true(ast.items[1].possessive)
+    assert.equal(ast.items[2].name, 'c')
+    -- a possessive repetition takes no further operator
+    assert.equal(parse_err('a?++', 'rules'), {
+        pos = 4,
+        code = 'repeated_postfix',
+    })
+    -- the "+" must follow the operator directly
+    assert.is_nil(parse_ok('a*', 'rules').possessive)
+    assert.equal(parse_err('a* +', 'rules'), {
+        pos = 4,
+        code = 'repeated_postfix',
+    })
+    -- tokens are matched by longest match, where a possessive repetition
+    -- means nothing
+    check_errors({
+        {
+            '"a"*+',
+            5,
+            'possessive_not_allowed',
+        },
+        {
+            '"a"?+',
+            5,
+            'possessive_not_allowed',
         },
     })
 end
@@ -1442,8 +1494,8 @@ function testcase.rules_returns_shared_errors()
             'unbalanced_paren',
         },
         {
-            'a*+',
-            3,
+            'a*++',
+            4,
             'repeated_postfix',
         },
         {

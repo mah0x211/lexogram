@@ -102,7 +102,7 @@
 -- one block are accepted here.
 --
 -- Unlike Lua 5.1, the parser of Lua 5.2 reads a "(" at the start of a line
--- after an expression as call arguments, as this grammar does (greedy), so
+-- after an expression as call arguments, as this grammar does (_suffix*+), so
 -- that difference of lua51 does not remain.
 return assert(require('lexogram.grammar')({
     extends = 'lexogram:lua51',
