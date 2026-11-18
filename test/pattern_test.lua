@@ -1018,8 +1018,8 @@ function testcase.parse_returns_unexpected_char()
             'unexpected_char',
         },
         {
-            '"a"{',
-            4,
+            '"a" }',
+            5,
             'unexpected_char',
         },
         {
@@ -1224,6 +1224,172 @@ function testcase.parse_reads_possessive_repetitions_in_rules()
             5,
             'possessive_not_allowed',
         },
+    })
+end
+
+-- a repetition node of a count, with count and, when possessive, group
+local function counted(t, item, count, group)
+    return {
+        type = t,
+        pos = item.pos,
+        item = item,
+        count = count,
+        possessive = group and true or nil,
+        group = group,
+    }
+end
+
+function testcase.parse_expands_counts_of_repetitions()
+    local a = lit(1, 'a')
+    -- n copies
+    assert.equal(parse_ok('"a"{3}'), seq({
+        a,
+        a,
+        a,
+    }))
+    assert.equal(parse_ok('"a"{1}'), a)
+    -- n copies, the last one repeated without a limit
+    assert.equal(parse_ok('"a"{2,}'), seq({
+        a,
+        counted('plus', a, '{2,}'),
+    }))
+    assert.equal(parse_ok('"a"{0,}'), counted('star', a, '{0,}'))
+    -- n copies, then m - n nested optional copies
+    assert.equal(parse_ok('"a"{1,3}'), seq({
+        a,
+        counted('opt', seq({
+            a,
+            counted('opt', a, '{1,3}'),
+        }), '{1,3}'),
+    }))
+    assert.equal(parse_ok('"a"{0,1}'), counted('opt', a, '{0,1}'))
+    -- each copy is a node of its own
+    local ast = parse_ok('("a" "b"){2}')
+    assert.not_rawequal(ast.items[1], ast.items[2])
+    assert.equal(ast.items[1], ast.items[2])
+    -- after a group, with white space before it, and nested
+    assert.equal(parse_ok('(DIGIT) {2}').type, 'seq')
+    ast = parse_ok('("a"{2}){3}')
+    assert.equal(#ast.items, 3)
+    assert.equal(#ast.items[3].items, 2)
+    -- a repetition counted
+    assert.equal(parse_ok('("a"+){2}'), seq({
+        postfix('plus', lit(2, 'a')),
+        postfix('plus', lit(2, 'a')),
+    }))
+    -- in rules, possessive
+    local group = {
+        count = '{2,}',
+    }
+    assert.equal(parse_ok('a{2,}+', 'rules'), seq({
+        ref(1, 'a'),
+        counted('plus', ref(1, 'a'), '{2,}', group),
+    }))
+    ast = parse_ok('a{0,2}+', 'rules')
+    assert.rawequal(ast.group, ast.item.items[2].group)
+    -- the copies of a possessive count keep a group each
+    ast = parse_ok('(a{0,2}+){2}', 'rules')
+    local first, second = ast.items[1], ast.items[2]
+    assert.rawequal(first.group, first.item.items[2].group)
+    assert.rawequal(second.group, second.item.items[2].group)
+    assert.not_rawequal(first.group, second.group)
+end
+
+function testcase.parse_rejects_invalid_counts()
+    check_errors({
+        {
+            '"a"{}',
+            5,
+            'invalid_repetition',
+        },
+        {
+            '"a"{,2}',
+            5,
+            'invalid_repetition',
+        },
+        {
+            '"a"{ 2}',
+            5,
+            'invalid_repetition',
+        },
+        {
+            '"a"{2 }',
+            4,
+            'invalid_repetition',
+        },
+        {
+            '"a"{2',
+            4,
+            'invalid_repetition',
+        },
+        {
+            '"a"{0}',
+            4,
+            'invalid_repetition',
+        },
+        {
+            '"a"{0,0}',
+            4,
+            'invalid_repetition',
+        },
+        {
+            '"a"{3,2}',
+            4,
+            'invalid_repetition',
+        },
+        {
+            '"a"{1001}',
+            4,
+            'invalid_repetition',
+        },
+        {
+            '"a"{1,99999}',
+            4,
+            'invalid_repetition',
+        },
+        -- the counts would make more than 10000 nodes
+        {
+            '("a"{100}){101}',
+            11,
+            'invalid_repetition',
+        },
+        -- another postfix operator, and a lookahead
+        {
+            '"a"{2}?',
+            7,
+            'repeated_postfix',
+        },
+        {
+            '"a"?{2}',
+            5,
+            'repeated_postfix',
+        },
+        {
+            '"a"{2}{3}',
+            7,
+            'repeated_postfix',
+        },
+        {
+            '(?="a"){2}',
+            8,
+            'invalid_lookahead',
+        },
+        -- a possessive count in tokens
+        {
+            '"a"{2,}+',
+            8,
+            'possessive_not_allowed',
+        },
+        {
+            '{2}',
+            1,
+            'missing_operand',
+        },
+    })
+    -- a fixed count repeats nothing to make possessive
+    assert.equal(parse_err('a{2}+', 'rules'), {
+        pos = 5,
+        code = 'invalid_repetition',
     })
 end
 
