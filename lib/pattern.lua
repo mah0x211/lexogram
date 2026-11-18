@@ -27,15 +27,22 @@
 -- choice and possessive repetitions (?+, *+, ++: the node of the repetition
 -- has possessive = true) instead. The 'tokens' context allows lookaheads:
 -- (?= p ) and (?! p ) give { type = 'lookahead', negative, item }, which
--- consume nothing and cannot be repeated. In the 'tokens' context, the names of the
--- captures of a delimited token table may also be given; they resolve to
--- capture nodes.
+-- consume nothing and cannot be repeated. A count after a primary, {n},
+-- {n,} or {n,m}, is expanded into the nodes of the other operators: n
+-- copies of the primary, then a plus or star node for {n,}, or nested opt
+-- nodes for the m - n optional copies; these repetition nodes have count
+-- (the text of the count), and, when a "+" after the count makes them
+-- possessive, group, a table that they share. In the 'tokens' context,
+-- the names of the captures of a delimited token table may also be given;
+-- they resolve to capture nodes.
 -- Groups may be nested at most MAX_NESTING levels deep (nesting_too_deep).
 local type = type
 local error = error
 local pcall = pcall
 local rawget = rawget
+local next = next
 local ipairs = ipairs
+local tonumber = tonumber
 local tostring = tostring
 local setmetatable = setmetatable
 local getmetatable = getmetatable
@@ -62,6 +69,9 @@ local STAR = 42
 local PLUS = 43
 local HYPHEN = 45
 local SLASH = 47
+local COMMA = 44
+local ZERO = 48
+local NINE = 57
 local EQUALS = 61
 local QUESTION = 63
 local LBRACKET = 91
@@ -81,6 +91,12 @@ local RBRACE = 125
 -- the result deterministic on every runtime; it is far below any runtime's
 -- call depth limit and far above what any real grammar needs.
 local MAX_NESTING = 100
+
+-- Largest count of a repetition {n,m}, and largest number of nodes that the
+-- counts of one pattern may add; both keep the expansion of the counts
+-- small before any automaton is built.
+local MAX_COUNT = 1000
+local MAX_EXPANDED = 10000
 
 -- Largest valid Unicode code point and the surrogate range.
 local MAX_CODE_POINT = 0x10FFFF
@@ -118,6 +134,7 @@ local PRIMARY = 'primary'
 local SYMBOLS = {
     [LPAREN] = '(',
     [RPAREN] = ')',
+    [LBRACE] = '{',
     [VBAR] = '|',
     [QUESTION] = '?',
     [STAR] = '*',
@@ -873,9 +890,183 @@ local function parse_group(p)
     return node
 end
 
+--- copy_node returns a deep copy of the AST node, so that each copy of a
+--- repeated primary is a node of its own; a table that the node refers to
+--- more than once (the group of a possessive count inside it) stays one
+--- table in the copy.
+--- @param node table
+--- @param seen table? original -> copy
+--- @return table
+local function copy_node(node, seen)
+    seen = seen or {}
+    if seen[node] then
+        return seen[node]
+    end
+    local out = {}
+    seen[node] = out
+    for k, v in next, node do
+        out[k] = type(v) == 'table' and copy_node(v, seen) or v
+    end
+    return out
+end
+
+--- count_nodes returns the number of nodes of the AST node.
+--- @param node table
+--- @return integer
+local function count_nodes(node)
+    local n = 1
+    if node.items then
+        for _, item in ipairs(node.items) do
+            n = n + count_nodes(item)
+        end
+    elseif node.item then
+        n = n + count_nodes(node.item)
+    end
+    return n
+end
+
+--- scan_count returns the decimal number at pos of the source of p and the
+--- position after it, or nil and pos if there is no digit there.
+--- @param p table parser state
+--- @param pos integer
+--- @return integer?
+--- @return integer
+local function scan_count(p, pos)
+    local i = pos
+    local b = byte(p.src, i)
+    while b and b >= ZERO and b <= NINE do
+        i = i + 1
+        b = byte(p.src, i)
+    end
+    if i == pos then
+        return nil, pos
+    elseif i - pos > 4 then
+        -- more digits than MAX_COUNT has: too large whatever they are
+        return MAX_COUNT + 1, i
+    end
+    return tonumber(sub(p.src, pos, i - 1)), i
+end
+
+--- expand_count returns the nodes of node repeated min to max times (max
+--- nil: without a limit).
+--- @param node table
+--- @param min integer
+--- @param max integer?
+--- @param count string the text of the count, such as "{2,4}"
+--- @param possessive boolean
+--- @return table
+local function expand_count(node, min, max, count, possessive)
+    local group = possessive and {
+        count = count,
+    } or nil
+    local function repetition(t, item)
+        return {
+            type = t,
+            pos = node.pos,
+            item = item,
+            count = count,
+            possessive = possessive or nil,
+            group = group,
+        }
+    end
+    local items = {}
+    local function add(item)
+        items[#items + 1] = #items == 0 and item or copy_node(item)
+    end
+    if max == nil then
+        for _ = 1, min - 1 do
+            add(node)
+        end
+        items[#items + 1] = repetition(min == 0 and 'star' or 'plus',
+                                       #items == 0 and node or copy_node(node))
+    else
+        for _ = 1, min do
+            add(node)
+        end
+        local tail
+        for _ = 1, max - min do
+            local item = copy_node(node)
+            if tail then
+                item = {
+                    type = 'seq',
+                    pos = node.pos,
+                    items = {
+                        item,
+                        tail,
+                    },
+                }
+            end
+            tail = repetition('opt', item)
+        end
+        if tail then
+            items[#items + 1] = tail
+        end
+    end
+    if #items == 1 then
+        return items[1]
+    end
+    return {
+        type = 'seq',
+        pos = node.pos,
+        items = items,
+    }
+end
+
+--- parse_count parses a count {n}, {n,} or {n,m} (p.pos is right after the
+--- "{"), which a "+" right after it makes possessive, and returns node
+--- repeated as it says.
+--- @param p table parser state
+--- @param node table
+--- @return table
+local function parse_count(p, node)
+    local open = p.tpos
+    local min, i = scan_count(p, p.pos)
+    if not min then
+        fail(i, 'invalid_repetition', 'a count is expected after "{"')
+    end
+    local max = min
+    if byte(p.src, i) == COMMA then
+        max, i = scan_count(p, i + 1)
+    end
+    if byte(p.src, i) ~= RBRACE then
+        fail(open, 'invalid_repetition', '"{" is not closed by "}"')
+    elseif max == 0 then
+        fail(open, 'invalid_repetition',
+             'a repetition of zero times matches nothing')
+    elseif max and min > max then
+        fail(open, 'invalid_repetition',
+             'the least count of a repetition is larger than the largest')
+    elseif min > MAX_COUNT or (max and max > MAX_COUNT) then
+        fail(open, 'invalid_repetition',
+             'a count of a repetition is larger than ' .. MAX_COUNT)
+    end
+    local count = sub(p.src, open, i)
+    i = i + 1
+    local possessive = false
+    if byte(p.src, i) == PLUS then
+        p.context.on_possessive(p, i)
+        if max == min then
+            fail(i, 'invalid_repetition',
+                 'a repetition of a fixed count cannot be possessive')
+        end
+        possessive = true
+        i = i + 1
+    end
+    local size = count_nodes(node) * (max or min + 1)
+    p.expanded = p.expanded + size
+    if p.expanded > MAX_EXPANDED then
+        fail(open, 'invalid_repetition',
+             'the counts of repetitions make' .. ' the pattern larger than ' ..
+                 MAX_EXPANDED .. ' nodes')
+    end
+    p.pos = i
+    return expand_count(node, min, max, count, possessive)
+end
+
 --- parse_repeat parses a primary with an optional postfix operator, which a
---- "+" right after it makes possessive (?+, *+, ++). It returns nil if the
---- current token cannot start a primary.
+--- "+" right after it makes possessive (?+, *+, ++), or with a count (see
+--- parse_count). It returns nil if the current token cannot start a
+--- primary.
 --- @param p table parser state
 --- @return table? node
 local function parse_repeat(p)
@@ -890,8 +1081,15 @@ local function parse_repeat(p)
     end
 
     local t = POSTFIX[p.kind]
-    if t and node.type == 'lookahead' then
+    if (t or p.kind == '{') and node.type == 'lookahead' then
         fail(p.tpos, 'invalid_lookahead', 'a lookahead cannot be repeated')
+    elseif p.kind == '{' then
+        node = parse_count(p, node)
+        advance(p)
+        if POSTFIX[p.kind] or p.kind == '{' then
+            fail(p.tpos, 'repeated_postfix',
+                 'postfix operator follows another postfix operator')
+        end
     elseif t then
         node = {
             type = t,
@@ -905,7 +1103,7 @@ local function parse_repeat(p)
             p.pos = p.pos + 1
         end
         advance(p)
-        if POSTFIX[p.kind] then
+        if POSTFIX[p.kind] or p.kind == '{' then
             fail(p.tpos, 'repeated_postfix',
                  'postfix operator follows another postfix operator')
         end
@@ -1010,6 +1208,8 @@ local function parse(src, context, captures)
         pos = 1,
         -- current nesting depth of groups
         depth = 0,
+        -- number of nodes that the counts of repetitions added
+        expanded = 0,
         context = CONTEXTS[context],
         captures = captures,
     })

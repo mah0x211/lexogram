@@ -30,6 +30,7 @@
 -- passes found no error. mixin(def) checks the metadata of a mixin (see
 -- lexogram.extend), whose other fields are a difference table.
 local type = type
+local tostring = tostring
 local next = next
 local rawget = rawget
 local ipairs = ipairs
@@ -1509,21 +1510,40 @@ local PASSES = {
     check_syntax,
 }
 
---- finish returns the diagnostics of ctx, sorted, in the public form.
+--- finish returns the diagnostics of ctx, sorted and without duplicates,
+--- in the public form.
 --- @param ctx table
 --- @return table[] diagnostics { severity, code, path, pos, message }
 local function finish(ctx)
     local list = ctx.diagnostics
     sort(list, diagnostic_less)
-    local out = {}
-    for i, d in ipairs(list) do
-        out[i] = {
-            severity = d.severity,
-            code = d.code,
-            path = path_string(d.segments),
-            pos = d.pos,
-            message = d.message,
+    -- the copies that a count {n,m} makes of a part of a pattern can give
+    -- the same diagnostic more than once; it is reported once
+    -- (the key uses the segments themselves: two keys of other types than
+    -- string and number print alike, but are other places)
+    local out, seen = {}, {}
+    for _, d in ipairs(list) do
+        local path = path_string(d.segments)
+        local parts = {
+            d.severity,
+            d.code,
+            tostring(d.pos),
+            d.message,
         }
+        for _, seg in ipairs(d.segments) do
+            parts[#parts + 1] = type(seg) .. ':' .. tostring(seg)
+        end
+        local key = concat(parts, '\0')
+        if not seen[key] then
+            seen[key] = true
+            out[#out + 1] = {
+                severity = d.severity,
+                code = d.code,
+                path = path,
+                pos = d.pos,
+                message = d.message,
+            }
+        end
     end
     return out
 end

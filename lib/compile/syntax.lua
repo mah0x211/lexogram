@@ -489,13 +489,21 @@ local function repeat_decision(ctx, name, node, conts)
         second[t] = map
     end
     local greedy = smallest(intersect(enter2, conts[node][2]))
-    local operator = OPERATORS[node.type]
-    local what = node.type == 'opt' and 'optional element' or 'repetition'
+    -- a repetition of a count {n,m} is told by its count, and the nodes of
+    -- a possessive count share a group, which needs the "+" when any of
+    -- them is ambiguous
+    local count = node.count
+    local operator = count or OPERATORS[node.type]
+    local what = (node.type == 'opt' and not count) and 'optional element' or
+                     'repetition'
+    if node.group and greedy then
+        node.group.needed = true
+    end
     if not nullable and greedy and not node.possessive then
         add_diagnostic(ctx, 'error', 'ambiguous_repetition',
                        pair('rules', name), node.pos,
                        'rules.' .. name .. ': the ' .. what ..
-                           (node.type == 'opt' and
+                           (what == 'optional element' and
                                ' can both be taken and skipped' or
                                ' can both continue and end') .. ' with ' ..
                            render(ctx.names_of, greedy) ..
@@ -545,8 +553,11 @@ end
 --- @param ctx table
 local function warn_unneeded(ctx)
     for _, u in ipairs(ctx.unneeded) do
-        add_diagnostic(ctx, 'warning', 'unneeded_possessive',
-                       pair('rules', u.rule), u.node.pos, u.message)
+        local group = u.node.group
+        if not (group and group.needed) then
+            add_diagnostic(ctx, 'warning', 'unneeded_possessive',
+                           pair('rules', u.rule), u.node.pos, u.message)
+        end
     end
 end
 
