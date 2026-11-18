@@ -199,8 +199,11 @@ local function compile_function(tbl)
     if not src then
         return nil, err
     end
+    -- the chunk name tells the grammar and its version in error messages
+    -- and tracebacks ("@" is not a character of a name or a version)
     local chunk = assert(load_text('return function()\n' .. src .. 'end\n',
-                                   '=lexogram.grammar:' .. tbl.name, {}))
+                                   '=lexogram.grammar:' .. tbl.name .. '@' ..
+                                       tbl.version, {}))
     return chunk()
 end
 

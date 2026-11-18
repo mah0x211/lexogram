@@ -838,8 +838,8 @@ function testcase.mixins_are_checked_and_not_loaded_as_grammars()
     assert.equal(err_of('bad_mixin'),
                  MIXINS .. 'bad_mixin.lua: name: required' ..
                      ' field name is missing\n' .. MIXINS ..
-                     'bad_mixin.lua: version: version must be MAJOR.MINOR.PATCH,' ..
-                     ' got "1"')
+                     'bad_mixin.lua: version: version must match' ..
+                     ' ^[0-9A-Za-z._+-]+$, got "1 0"')
     assert.equal(err_of('bad_shape'), MIXINS .. 'bad_shape.lua: +skip: the' ..
                      ' value must be an array of items')
     assert.equal(err_of('mixin_extends_grammar'),

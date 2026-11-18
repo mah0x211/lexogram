@@ -45,7 +45,7 @@ function testcase.grammar_is_lua54_with_a_leading_shebang()
     local lua54 = assert(shared.load('lexogram:lua54'))
 
     assert.equal(grammar.name, 'lua54_shebang')
-    assert.equal(grammar.version, '1.0.0')
+    assert.equal(grammar.version, '5.4.8-1')
     assert.equal(grammar.leading, {
         'shebang',
     })

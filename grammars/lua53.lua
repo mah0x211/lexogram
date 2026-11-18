@@ -38,7 +38,8 @@
 --   lexogram  '2026.11.15.1'
 --   name      'lua53', the built-in grammar "lexogram:lua53" (module
 --             lexogram.grammars.lua53)
---   version   '1.0.0'
+--   version   '5.3.6-1', the release of Lua it was checked against and the
+--             revision of the grammar
 --
 -- It accepts the syntax as the parser of Lua 5.3 does (load).
 --
@@ -102,7 +103,7 @@ return assert(require('lexogram.grammar')({
     extends = 'lexogram:lua52',
     lexogram = '2026.11.15.1',
     name = 'lua53',
-    version = '1.0.0',
+    version = '5.3.6-1',
     ['+symbols'] = {
         '//',
         '&',

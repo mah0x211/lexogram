@@ -56,7 +56,7 @@ function testcase.new_returns_a_function_of_new_copies()
     def.start = 'changed'
     assert.equal(fn(), base())
     -- the chunk is named after the grammar
-    assert.equal(debug.getinfo(fn, 'S').source, '=lexogram.grammar:test')
+    assert.equal(debug.getinfo(fn, 'S').source, '=lexogram.grammar:test@1.0.0')
     -- each call runs the table constructors again
     assert.not_rawequal(fn(), fn())
     assert.not_rawequal(fn().tokens, fn().tokens)
@@ -278,7 +278,8 @@ function testcase.new_defines_a_mixin()
         -- a new copy of the mixin as written
         assert.equal(fn(), hex_mixin())
         assert.not_rawequal(fn(), fn())
-        assert.equal(debug.getinfo(fn, 'S').source, '=lexogram.grammar:hex')
+        assert.equal(debug.getinfo(fn, 'S').source,
+                     '=lexogram.grammar:hex@1.0.0')
         -- the chain of a built-in mixin
         local chain, _, kind = grammar.builtin_value('number')
         assert.equal(kind, 'mixin')

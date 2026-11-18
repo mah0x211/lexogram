@@ -1,6 +1,6 @@
 # Lua 5.1 grammar
 
-The built-in grammars of Lua 5.1. The rules follow the complete syntax of Lua in section 8 of the Lua 5.1 reference manual; rule names come from the manual and from the Lua 5.1 parser (`lparser.c`). Together with the token names they are a public contract with consumers, and the version of the grammar follows it: a renamed or removed name is a new major version.
+The built-in grammars of Lua 5.1. The rules follow the complete syntax of Lua in section 8 of the Lua 5.1 reference manual; rule names come from the manual and from the Lua 5.1 parser (`lparser.c`). Together with the token names they are a public contract with consumers: a change that breaks it is listed in [the changes](#changes).
 
 ```lua
 local lexogram = require('lexogram')
@@ -18,11 +18,13 @@ The fields `lexogram`, `name` and `version` tell which grammar a file is: the re
 |---|---|---|
 | `lexogram` | `'2026.11.15.1'` | `'2026.11.15.1'` |
 | `name` | `'lua51'` | `'lua51_shebang'` |
-| `version` | `'1.0.0'` | `'1.0.0'` |
+| `version` | `'5.1.5-1'` | `'5.1.5-1'` |
 | `extends` | — | `'lexogram:lua51'` |
 | `embeds` | — | `{ 'lexogram:shebang' }` |
 | Built-in name | `lexogram:lua51` | `lexogram:lua51_shebang` |
 | Module | `lexogram.grammars.lua51` | `lexogram.grammars.lua51_shebang` |
+
+The version is `5.1.5-1`: the release of Lua 5.1 that the grammar was checked against, and the revision of the grammar, as for every built-in grammar (see [the grammar format](../grammar.md#metadata)). A change that breaks the rule names or the token names is listed in [the changes](#changes).
 
 `lua51` accepts the syntax as the parser of Lua 5.1 does (`loadstring`). `lua51_shebang` is `lua51` with a first line that starts with `#` skipped, as the file loader of Lua 5.1 (`luaL_loadfile`, `lua`, `luac`) reads files; it differs from `lua51` only in the `tokens`, `skip` and `leading` fields, which the built-in mixin `lexogram:shebang` (module `lexogram.grammars.shebang`) adds.
 
@@ -234,3 +236,9 @@ The speed of `lua51` on each runtime. `lua bench/tokenize.lua lexogram:lua51` an
 | Lua 5.4 | 0.19 s | 7.3 MB/s | 3.3 MB/s |
 | Lua 5.5 | 0.20 s | 7.2 MB/s | 3.3 MB/s |
 | LuaJIT 2.1 | 0.10 s | 105 to 110 MB/s | 22 to 31 MB/s |
+
+## Changes
+
+| Version | Change |
+|---|---|
+| `5.1.5-1` | The first version (2026-11-18). |

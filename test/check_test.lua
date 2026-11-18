@@ -2254,12 +2254,30 @@ end
 function testcase.check_reports_invalid_name_and_version()
     local g = valid_grammar()
     g.name = 'lua 5.1'
-    g.version = '1.0'
+    g.version = '1.0 beta'
 
     assert.equal(check.check(g), {
         err('invalid_value', 'name',
             'name must match ^[A-Za-z0-9_-]+$, got "lua 5.1"'),
         err('invalid_value', 'version',
-            'version must be MAJOR.MINOR.PATCH, got "1.0"'),
+            'version must match ^[0-9A-Za-z._+-]+$, got "1.0 beta"'),
+    })
+    -- the version is any string of these characters; its meaning is the
+    -- author's
+    for _, version in ipairs({
+        '1',
+        '1.0',
+        '5.4.8-1',
+        '2.1.1792527310-1',
+        '1.0.0-rc.1+build_2',
+    }) do
+        g = valid_grammar()
+        g.version = version
+        assert.equal(check.check(g), {})
+    end
+    g.version = ''
+    assert.equal(check.check(g), {
+        err('invalid_value', 'version',
+            'version must match ^[0-9A-Za-z._+-]+$, got ""'),
     })
 end

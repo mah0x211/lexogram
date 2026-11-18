@@ -18,9 +18,11 @@ The fields `lexogram`, `name` and `version` tell which grammar a file is, `exten
 | `embeds` | — | `{ 'lexogram:bom_shebang' }` |
 | `lexogram` | `'2026.11.15.1'` | `'2026.11.15.1'` |
 | `name` | `'lua54'` | `'lua54_shebang'` |
-| `version` | `'1.0.0'` | `'1.0.0'` |
+| `version` | `'5.4.8-1'` | `'5.4.8-1'` |
 | Built-in name | `lexogram:lua54` | `lexogram:lua54_shebang` |
 | Module | `lexogram.grammars.lua54` | `lexogram.grammars.lua54_shebang` |
+
+The version is `5.4.8-1`: the release of Lua 5.4 that the grammar was checked against, and the revision of the grammar, as for every built-in grammar (see [the grammar format](../grammar.md#metadata)). A change that breaks the rule names or the token names is listed in [the changes](#changes).
 
 `lua54` accepts the syntax as the parser of Lua 5.4 does (`load`). `lua54_shebang` is `lua54` with a UTF-8 byte order mark and a first line that starts with `#` skipped, as the file loader of Lua 5.4 (`luaL_loadfilex`, `lua`, `luac`) reads files, the same as in Lua 5.2 and 5.3; it differs from `lua54` only in the `tokens`, `skip` and `leading` fields, which the built-in mixin `lexogram:bom_shebang` adds, as for [`lua52_shebang`](lua52.md#tokens).
 
@@ -120,3 +122,9 @@ The numbers and the escapes were also compared with `load` of Lua 5.4.8 on 2026-
 | Lua 5.4 | 0.28 s | 7.4 MB/s | 3.4 MB/s |
 | Lua 5.5 | 0.28 s | 7.1 MB/s | 3.3 MB/s |
 | LuaJIT 2.1 | 0.16 s | 105 to 113 MB/s | 22 to 33 MB/s |
+
+## Changes
+
+| Version | Change |
+|---|---|
+| `5.4.8-1` | The first version (2026-11-18). |

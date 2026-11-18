@@ -74,7 +74,7 @@ function testcase.grammar_extends_lua54()
     local lua54 = assert(shared.load('lexogram:lua54'))
 
     assert.equal(grammar.name, 'lua55')
-    assert.equal(grammar.version, '1.0.0')
+    assert.equal(grammar.version, '5.5.1-1')
     -- the rules of lua54, and globalfunc and globalstat
     local names = {}
     for _, kind in ipairs(compiled().kinds) do

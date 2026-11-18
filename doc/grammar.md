@@ -99,7 +99,8 @@ The fields `lexogram`, `name` and `version` tell which grammar a table is.
 
 - **`lexogram`**: the revision of this specification, `yyyy.mm.dd.n`. A later lexogram reads a grammar with the meaning of the revision it states; a revision newer than the running lexogram, or older than the first one, is an error. The only revision so far is `2026.11.15.1`.
 - **`name`**: matches `^[A-Za-z0-9_-]+$`. A built-in grammar is named after its module (`lexogram:lua51` is named `lua51`). The compiled object carries it as `compiled.name`.
-- **`version`**: the version of the grammar itself, `MAJOR.MINOR.PATCH`. Rule names and token names are a contract with consumers: a change that breaks it (a renamed or removed name) raises MAJOR, a compatible addition MINOR, any other fix PATCH. The compiled object carries it as `compiled.version`.
+- **`version`**: the version of the grammar itself, a string of letters, digits, `.`, `_`, `+` and `-` (`^[0-9A-Za-z._+-]+$`). Its form and meaning are the author's: lexogram does not compare versions. The compiled object carries it as `compiled.version`, and the functions of `lexogram.grammar` have it in their chunk name (`=lexogram.grammar:<name>@<version>`), so that error messages and tracebacks tell the grammar and its version.
+- **Versions of the built-in grammars**: the version of the language that a built-in grammar was checked against, a `-`, and the revision of the grammar, counted from 1: `5.4.8-1` is the first revision for Lua 5.4.8, as a LuaRocks rockspec writes `1.0.0-1`. The revision is not a pre-release as in Semantic Versioning. Rule names and token names are a contract with consumers; since the version does not tell a change that breaks it, the document of each grammar lists its changes. The built-in mixins, which have no language, have their own version (`1.0.0`).
 
 ## start
 

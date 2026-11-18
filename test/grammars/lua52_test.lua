@@ -73,7 +73,7 @@ function testcase.grammar_extends_lua51()
     local grammar = assert(shared.load('lexogram:lua52'))
 
     assert.equal(grammar.name, 'lua52')
-    assert.equal(grammar.version, '1.0.0')
+    assert.equal(grammar.version, '5.2.4-1')
     assert.is_nil(grammar.rules._laststat)
     assert.is_nil(grammar.tokens.long_string.nest)
     local names = {}

@@ -39,7 +39,8 @@
 --   lexogram  '2026.11.15.1'
 --   name      'lua54', the built-in grammar "lexogram:lua54" (module
 --             lexogram.grammars.lua54)
---   version   '1.0.0'
+--   version   '5.4.8-1', the release of Lua it was checked against and the
+--             revision of the grammar
 --
 -- It accepts the syntax as the parser of Lua 5.4 does (load).
 --
@@ -80,7 +81,7 @@ return assert(require('lexogram.grammar')({
     extends = 'lexogram:lua53',
     lexogram = '2026.11.15.1',
     name = 'lua54',
-    version = '1.0.0',
+    version = '5.4.8-1',
     tokens = {
         -- the lexer reads hexadecimal digits, dots, exponent marks with
         -- their signs and one letter or "_" more, and rejects the whole run
