@@ -302,6 +302,94 @@ function testcase.build_reports_check_automata_too_large()
     })
 end
 
+function testcase.build_reports_fragment_intersections_too_large()
+    -- the DFA of a pattern of a fragment written as an array
+    local result, diagnostics = lexer.build(grammar({
+        t = '_f',
+        _f = {
+            '[ab]+',
+            '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 4),
+        },
+    }), {
+        dfa_states = 8,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 8 states'),
+    })
+
+    -- its NFA
+    result, diagnostics = lexer.build(grammar({
+        t = '_f',
+        _f = {
+            '[a-h]+',
+            '"abcdefgh"',
+        },
+    }), {
+        nfa_states = 5,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the automaton would have more than 5 states'),
+    })
+
+    -- the intersection (5 and 6 states, 21 together)
+    result, diagnostics = lexer.build(grammar({
+        t = '_f',
+        _f = {
+            '([ab]{4})+',
+            '([ab]{5})+',
+        },
+    }), {
+        dfa_states = 9,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 9 states'),
+    })
+
+    -- the NFA of the check of a token (14 states for the token automaton,
+    -- 46 for the check)
+    result, diagnostics = lexer.build(grammar({
+        t = '_f _f',
+        _f = {
+            '([ab]{4})+',
+            '([ab]{5})+',
+        },
+    }), {
+        nfa_states = 30,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the automaton would have more than 30 states'),
+    })
+
+    -- the check of a token with the intersection twice
+    result, diagnostics = lexer.build(grammar({
+        t = '_f "x" _f',
+        _f = {
+            '([ab]{4})+',
+            '([ab]{5})+',
+        },
+    }), {
+        dfa_states = 30,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 30 states'),
+    })
+end
+
 function testcase.build_raises_for_invalid_limits()
     local g = grammar({
         t = '"t"',

@@ -304,20 +304,7 @@ function testcase.the_array_is_checked()
     })
 end
 
-function testcase.an_array_is_no_fragment_and_no_delimited_token()
-    assert.equal(errors_of({
-        tokens = {
-            space = '" "+',
-            number = '[0-9]+',
-            _digits = {
-                '[0-9]+',
-            },
-        },
-    }), {
-        'invalid_name tokens._digits: tokens._digits: a token written as an' ..
-            ' array of patterns cannot be a fragment (its name must not start' ..
-            ' with "_")',
-    })
+function testcase.an_array_is_no_delimited_token()
     assert.equal(errors_of({
         tokens = {
             space = '" "+',
@@ -395,4 +382,231 @@ function testcase.marks_change_the_array()
     })
     assert.is_nil(grammar_)
     assert.match(err, 'tokens.space', false)
+end
+
+-- numbers of two forms, each with its limit: at most three decimal digits
+-- with an exponent of one digit, or at most two hexadecimal digits
+local FORMS = {
+    space = '" "+',
+    _dec = {
+        '[0-9]+',
+        '[0-9]{1,3}',
+    },
+    _exp = {
+        '"e" [0-9]+',
+        '"e" [0-9]',
+    },
+    _hex = {
+        '"0x" [0-9a-f]+',
+        '"0x" [0-9a-f]{1,2}',
+    },
+    number = '(_hex | _dec _exp?) (?![0-9a-z])',
+}
+
+function testcase.a_fragment_written_as_an_array_matches_all_its_patterns()
+    local compiled = compiled_of({
+        tokens = FORMS,
+    })
+    local number = compiled.names.number
+    -- the first patterns choose the token; the others check it
+    for _, source in ipairs({
+        '123;',
+        '0xff;',
+        '12e3;',
+    }) do
+        assert.equal(first_token(compiled, source), {
+            number,
+            #source,
+        })
+    end
+    for _, source in ipairs({
+        '1234;',
+        '0xfff;',
+        '12e34;',
+        '1234e3;',
+    }) do
+        assert.equal(first_token(compiled, source), {
+            number,
+            #source,
+            'invalid',
+            1,
+        })
+    end
+    assert.equal(parse_error(compiled, '1; 0x1f; 9e9;'), 'ok')
+    assert.equal(parse_error(compiled, '1; 0x1ff;'),
+                 'invalid_token 4: invalid number')
+    -- the check of the first pattern is first in the checks of the kind
+    local checks = compiled.lexer.checks[number]
+    assert.is_table(checks.first)
+    assert.equal(#checks, 0)
+end
+
+function testcase.fragments_written_as_arrays_nest_and_are_reached_through_others()
+    local compiled = compiled_of({
+        tokens = {
+            space = '" "+',
+            _width = {
+                '[0-9]+',
+                '[0-9]{1,4}',
+            },
+            -- at most four digits, without a leading zero; it is built
+            -- after _width, which it refers to and which comes later by name
+            _digits = {
+                '_width',
+                '[1-9] [0-9]*',
+            },
+            _plain = '_digits',
+            number = '_plain (?![0-9])',
+        },
+    })
+    assert.equal(parse_error(compiled, '12; 9999;'), 'ok')
+    assert.equal(parse_error(compiled, '012;'),
+                 'invalid_token 1: invalid number')
+    assert.equal(parse_error(compiled, '12345;'),
+                 'invalid_token 1: invalid number')
+end
+
+function testcase.checks_and_lookaheads_match_the_intersection()
+    -- a later pattern of a token
+    local compiled = compiled_of({
+        tokens = {
+            space = '" "+',
+            _two = {
+                '[0-9]+',
+                '[0-9]{1,2}',
+            },
+            number = {
+                '[0-9]+',
+                '_two',
+            },
+        },
+    })
+    assert.equal(first_token(compiled, '123;'), {
+        compiled.names.number,
+        4,
+        'invalid',
+        2,
+    })
+    -- the body of a lookahead
+    compiled = compiled_of({
+        tokens = {
+            space = '" "+',
+            _two = {
+                '[0-9]+',
+                '[0-9]{1,2}',
+            },
+            number = '"#" (?=_two ";") [0-9]+',
+        },
+    })
+    assert.equal(parse_error(compiled, '#12;'), 'ok')
+    assert.equal(first_token(compiled, '#123;'), {
+        1,
+        2,
+    })
+    -- the check of the first pattern comes before the later patterns
+    compiled = compiled_of({
+        tokens = {
+            space = '" "+',
+            _two = {
+                '[0-9]+',
+                '[0-9]{1,2}',
+            },
+            number = {
+                '_two',
+                '[0-8]+',
+            },
+        },
+    })
+    assert.equal(first_token(compiled, '999;'), {
+        compiled.names.number,
+        4,
+        'invalid',
+        1,
+    })
+    assert.equal(first_token(compiled, '99;'), {
+        compiled.names.number,
+        3,
+        'invalid',
+        2,
+    })
+end
+
+function testcase.a_token_without_such_fragments_has_no_check()
+    local compiled = compiled_of({
+        tokens = {
+            space = '" "+',
+            _d = '[0-9]',
+            number = '_d+',
+        },
+    })
+    assert.is_nil(compiled.lexer.checks)
+end
+
+function testcase.fragments_written_as_arrays_are_checked()
+    -- no lookahead, also through another fragment
+    assert.equal(errors_of({
+        tokens = {
+            space = '" "+',
+            _g = '"a" (?="b")',
+            _f = {
+                '[0-9]+ ("x" (?!"y"))?',
+                '[0-9]+ _g?',
+            },
+            number = '_f',
+        },
+    }), {
+        'lookahead_not_allowed tokens._f[1]: tokens._f[1]: a lookahead is' ..
+            ' not allowed in a fragment written as an array of patterns',
+        'lookahead_not_allowed tokens._f[2]: tokens._f[2]: a lookahead is' ..
+            ' not allowed in a fragment written as an array of patterns' ..
+            ' (through _g)',
+    })
+    -- a fragment that no string matches is reported by itself
+    assert.equal(errors_of({
+        tokens = {
+            space = '" "+',
+            _f = {
+                '[0-9]+',
+                '[a-z]+',
+            },
+            number = '_f',
+        },
+    }), {
+        'unmatchable_pattern tokens._f: tokens._f matches no non-empty' ..
+            ' string: no string matches all its patterns',
+    })
+    -- not in a delimited token table
+    assert.equal(errors_of({
+        tokens = {
+            space = '" "+',
+            _f = {
+                '[0-9]+',
+                '[0-9]',
+            },
+            number = '[0-9]+',
+            str = {
+                open = '"<" _f',
+                close = '">"',
+            },
+        },
+    }), {
+        'invalid_reference tokens.str.open: tokens.str.open: a fragment' ..
+            ' written as an array of patterns is not allowed in a delimited' ..
+            ' token table (through _f)',
+    })
+    -- cycles go through every pattern
+    assert.equal(errors_of({
+        tokens = {
+            space = '" "+',
+            _f = {
+                '[0-9]+',
+                '_g',
+            },
+            _g = '_f',
+            number = '_f',
+        },
+    }), {
+        'fragment_recursion tokens._f: fragment _f is recursive: _f -> _g ->' ..
+            ' _f',
+    })
 end

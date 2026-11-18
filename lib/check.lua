@@ -890,15 +890,12 @@ local function collect_tokens(ctx, tokens, kinds)
             local segs = child(ctx.tokens_segments, k)
             check_name_shape(ctx, segs, k)
             local kind = byte(k, 1) == UNDERSCORE and 'fragment' or 'token'
-            if kind == 'fragment' and type(v) == 'table' then
-                -- a table is never a fragment; it is registered as a token
-                -- so that a reference to it from a token pattern is
-                -- reported as not a fragment
-                local what = is_staged(v) and
-                                 'a token written as an array of patterns' or
-                                 'a delimited token table'
+            if kind == 'fragment' and type(v) == 'table' and not is_staged(v) then
+                -- a delimited token table is never a fragment; it is
+                -- registered as a token so that a reference to it from a
+                -- token pattern is reported as not a fragment
                 add_error(ctx, 'invalid_name', segs,
-                          label(segs) .. ': ' .. what .. ' cannot be a' ..
+                          label(segs) .. ': a delimited token table cannot be a' ..
                               ' fragment (its name must not start with "_")')
                 kind = 'token'
             end

@@ -27,7 +27,12 @@
 -- checked and compiled with lexogram.compile.delimited. A pattern token
 -- written as an array of patterns (stages) is in the automaton by its first
 -- pattern; each later one is an automaton of its own (a check), which the
--- whole text of the token must match. The grammar must have passed the
+-- whole text of the token must match. A fragment written as an array
+-- matches the strings that all its patterns match: the token automaton
+-- reads it by its first pattern, and a token that refers to one has a
+-- check of its first pattern, in which the fragment is the intersection of
+-- its patterns and the lookaheads match nothing (they were evaluated when
+-- the token was chosen). The grammar must have passed the
 -- structure, names and patterns passes of lexogram.check without errors;
 -- in particular every fragment is a pattern string (the names pass rejects
 -- a table named like a fragment), so every reference can be expanded.
@@ -117,15 +122,27 @@ local function is_staged(v)
 end
 
 --- collect_tokens returns the sorted names of the pattern tokens, the
---- parsed fragments and the sorted names of the delimited token tables.
+--- parsed fragments (by their first pattern), the sorted names of the
+--- delimited token tables and the parsed patterns of the fragments written
+--- as arrays.
 --- @param tokens table
 --- @return string[] names
 --- @return table fragments name -> AST
 --- @return string[] tables
+--- @return table staged name -> ASTs
 local function collect_tokens(tokens)
-    local names, fragments, tables = {}, {}, {}
+    local names, fragments, tables, staged = {}, {}, {}, {}
     for k, v in next, tokens do
-        if is_staged(v) then
+        if byte(k, 1) == UNDERSCORE and is_staged(v) then
+            local list = {}
+            local i = 1
+            while rawget(v, i) ~= nil do
+                list[i] = parse(rawget(v, i), 'tokens')
+                i = i + 1
+            end
+            fragments[k] = list[1]
+            staged[k] = list
+        elseif is_staged(v) then
             names[#names + 1] = k
         elseif type(v) == 'table' then
             tables[#tables + 1] = k
@@ -137,7 +154,7 @@ local function collect_tokens(tokens)
     end
     sort(names, byte_less)
     sort(tables, byte_less)
-    return names, fragments, tables
+    return names, fragments, tables, staged
 end
 
 -- Reserved kinds that precede every definition: 1 is a byte that matches
@@ -173,16 +190,18 @@ end
 --- which are tried at the start of input only), the ranks and the
 --- fragments. A leading token has leading = true in its definition, and a
 --- token written as an array of patterns has checks, the ASTs of its
---- patterns after the first.
+--- patterns after the first. The last result has the patterns of the
+--- fragments written as arrays.
 --- @param grammar table
 --- @return table[] defs
 --- @return table[] nfa_defs
 --- @return table[] leading_defs
 --- @return table rank
 --- @return table fragments
+--- @return table staged
 local function collect_definitions(grammar)
     local tokens = rawget(grammar, 'tokens')
-    local names, fragments, tables = collect_tokens(tokens)
+    local names, fragments, tables, staged = collect_tokens(tokens)
     local leading = leading_names(grammar)
     local defs, nfa_defs, leading_defs, rank = {}, {}, {}, {}
     for i, name in ipairs(RESERVED) do
@@ -209,6 +228,7 @@ local function collect_definitions(grammar)
                 checks = nil
             end
         end
+        local ast = parse(first, 'tokens')
         defs[id] = {
             id = id,
             kind = 'token',
@@ -220,7 +240,7 @@ local function collect_definitions(grammar)
         local list = leading[name] and leading_defs or nfa_defs
         list[#list + 1] = {
             id = id,
-            ast = parse(first, 'tokens'),
+            ast = ast,
         }
         rank[id] = TOKEN_RANK
     end
@@ -287,16 +307,26 @@ local function collect_definitions(grammar)
             segments = pair('tokens', name),
         }
     end
-    return defs, nfa_defs, leading_defs, rank, fragments
+    return defs, nfa_defs, leading_defs, rank, fragments, staged
 end
 
 --- check_recursion adds fragment_recursion for each cycle of fragment
 --- references and returns true if there is any.
 --- @param diagnostics table[]
 --- @param fragments table
+--- @param staged table
 --- @return boolean
-local function check_recursion(diagnostics, fragments)
-    local cycles = nfa.find_cycles(fragments)
+local function check_recursion(diagnostics, fragments, staged)
+    -- a fragment written as an array refers to the names of all its
+    -- patterns
+    local all = {}
+    for name, ast in next, fragments do
+        all[name] = staged[name] and {
+            type = 'choice',
+            items = staged[name],
+        } or ast
+    end
+    local cycles = nfa.find_cycles(all)
     for _, cycle in ipairs(cycles) do
         add_error(diagnostics, 'fragment_recursion', pair('tokens', cycle[1]),
                   'fragment ' .. cycle[1] .. ' is recursive: ' ..
@@ -564,30 +594,271 @@ local function matches_nonempty(d)
     return false
 end
 
---- build_checks builds an automaton for each check of the pattern tokens
---- (the patterns after the first of a token written as an array) and
---- returns them by kind id, or nil when there is none. A check that
---- accepts no non-empty string is unmatchable_pattern. It returns nil and
---- an automaton_too_large error when an automaton exceeds its limit.
---- @param defs table[]
+--- find_lookahead returns the position of the first lookahead in ast,
+--- expanding the fragments it refers to except those written as arrays
+--- (staged), and the name of the fragment through which it is reached, or
+--- nil.
+--- @param ast table
 --- @param fragments table
+--- @param staged table
+--- @return integer? pos
+--- @return string? through
+local function find_lookahead(ast, fragments, staged)
+    -- each item is { node, position of the reference, its name }
+    local stack, seen = {}, {}
+    stack[1] = {
+        ast,
+    }
+    while #stack > 0 do
+        local item = stack[#stack]
+        stack[#stack] = nil
+        local node = item[1]
+        if node.type == 'lookahead' then
+            return item[2] or node.pos, item[3]
+        elseif not seen[node] then
+            seen[node] = true
+            local kids = node.items
+            if not kids and node.item then
+                kids = {
+                    node.item,
+                }
+            elseif not kids and node.type == 'ref' and not staged[node.name] then
+                kids = {
+                    fragments[node.name],
+                }
+            end
+            for i = #(kids or {}), 1, -1 do
+                stack[#stack + 1] = {
+                    kids[i],
+                    item[2] or (node.type == 'ref' and node.pos) or nil,
+                    item[3] or (node.type == 'ref' and node.name) or nil,
+                }
+            end
+        end
+    end
+    return nil
+end
+
+--- check_staged_lookaheads adds lookahead_not_allowed for each pattern of a
+--- fragment written as an array that has a lookahead (also through another
+--- fragment), and returns true if there is any: the intersection of the
+--- patterns would not tell where a lookahead holds.
+--- @param diagnostics table[]
+--- @param fragments table
+--- @param staged table
+--- @return boolean
+local function check_staged_lookaheads(diagnostics, fragments, staged)
+    local found = false
+    for name, list in next, staged do
+        for i, ast in ipairs(list) do
+            local pos, through = find_lookahead(ast, fragments, staged)
+            if pos then
+                found = true
+                diagnostics[#diagnostics + 1] = {
+                    severity = 'error',
+                    code = 'lookahead_not_allowed',
+                    segments = {
+                        'tokens',
+                        name,
+                        i,
+                    },
+                    pos = pos,
+                    message = 'tokens.' .. name .. '[' .. i .. ']: a' ..
+                        ' lookahead is not allowed in a fragment written as' ..
+                        ' an array of patterns' ..
+                        (through and ' (through ' .. through .. ')' or ''),
+                }
+            end
+        end
+    end
+    return found
+end
+
+--- staged_refs returns the set of the fragments written as arrays that ast
+--- refers to, directly or through other fragments.
+--- @param ast table
+--- @param fragments table
+--- @param staged table
+--- @return table name -> true
+local function staged_refs(ast, fragments, staged)
+    local found, seen = {}, {}
+    local stack = {}
+    stack[1] = ast
+    while #stack > 0 do
+        local node = stack[#stack]
+        stack[#stack] = nil
+        if node.type == 'ref' then
+            local name = node.name
+            if staged[name] then
+                found[name] = true
+            elseif fragments[name] and not seen[name] then
+                seen[name] = true
+                stack[#stack + 1] = fragments[name]
+            end
+        elseif node.items then
+            for i = #node.items, 1, -1 do
+                stack[#stack + 1] = node.items[i]
+            end
+        elseif node.item then
+            stack[#stack + 1] = node.item
+        end
+    end
+    return found
+end
+
+--- build_exact returns the fragments with each fragment written as an
+--- array replaced by an automaton node of the intersection of its
+--- patterns, built in the order of their references (fragments are
+--- acyclic). A fragment whose intersection accepts no non-empty string is
+--- unmatchable_pattern. It returns nil and an automaton_too_large error
+--- when an automaton exceeds its limit.
+--- @param fragments table
+--- @param staged table
+--- @param limits table { nfa, dfa }
+--- @param diagnostics table[]
+--- @return table? exact name -> AST or automaton node
+--- @return table? err
+local function build_exact(fragments, staged, limits, diagnostics)
+    local exact, pending, deps = {}, {}, {}
+    for name, ast in next, fragments do
+        exact[name] = ast
+    end
+    for name, list in next, staged do
+        pending[#pending + 1] = name
+        local set = {}
+        for _, ast in ipairs(list) do
+            for ref in next, staged_refs(ast, fragments, staged) do
+                set[ref] = true
+            end
+        end
+        deps[name] = set
+    end
+    sort(pending, byte_less)
+    local done = {}
+    while #pending > 0 do
+        local rest = {}
+        for _, name in ipairs(pending) do
+            local ready = true
+            for ref in next, deps[name] do
+                if not done[ref] then
+                    ready = false
+                end
+            end
+            if ready then
+                local list = {}
+                for i, ast in ipairs(staged[name]) do
+                    local machine, err = nfa.build({
+                        {
+                            id = 1,
+                            ast = ast,
+                        },
+                    }, exact, limits.nfa, nil, true)
+                    if not machine then
+                        return nil, err
+                    end
+                    list[i], err = dfa.build(machine, {
+                        1,
+                    }, limits.dfa)
+                    if not list[i] then
+                        return nil, err
+                    end
+                end
+                local d, err = dfa.intersect(list, limits.dfa)
+                if not d then
+                    return nil, err
+                end
+                if not matches_nonempty(d) then
+                    add_error(diagnostics, 'unmatchable_pattern',
+                              pair('tokens', name),
+                              'tokens.' .. name ..
+                                  ' matches no non-empty string: no string' ..
+                                  ' matches all its patterns')
+                end
+                exact[name] = {
+                    type = 'automaton',
+                    automaton = d,
+                }
+                done[name] = true
+            else
+                rest[#rest + 1] = name
+            end
+        end
+        pending = rest
+    end
+    return exact
+end
+
+--- marked returns the fragments with each fragment written as an array
+--- replaced by a node of type 'staged', which a delimited token table must
+--- not refer to (see lexogram.compile.delimited).
+--- @param fragments table
+--- @param staged table
+--- @return table
+local function marked(fragments, staged)
+    local out = {}
+    for name, ast in next, fragments do
+        out[name] = staged[name] and {
+            type = 'staged',
+        } or ast
+    end
+    return out
+end
+
+--- build_checks builds the checks of the pattern tokens and returns them by
+--- kind id ({ first = <automaton>?, <automaton>... }), or nil when there is
+--- none: first is the check of the first pattern of a token that refers to
+--- a fragment written as an array (with the intersections of exact, and
+--- without its lookaheads), and the array has the patterns after the first
+--- of a token written as an array. A later pattern that accepts no
+--- non-empty string is unmatchable_pattern (the check of the first pattern
+--- always accepts one: a pattern that matches only the empty string is
+--- empty_match, and a fragment that matches none is reported by
+--- build_exact). It returns nil and an automaton_too_large error when an
+--- automaton exceeds its limit.
+--- @param defs table[]
+--- @param asts table kind id -> AST of the (first) pattern of each token
+--- @param fragments table
+--- @param exact table the fragments of build_exact
+--- @param staged table
 --- @param preds table predicates shared with the token automaton
 --- @param limits table { nfa, dfa }
 --- @param diagnostics table[]
 --- @return table? checks kind id -> automata
 --- @return table? err
-local function build_checks(defs, fragments, preds, limits, diagnostics)
+local function build_checks(defs, asts, fragments, exact, staged, preds, limits,
+                            diagnostics)
     local checks
     for _, def in ipairs(defs) do
-        if def.checks then
-            local list = {}
-            for i, ast in ipairs(def.checks) do
+        local first
+        local pattern = def.kind == 'token' and asts[def.id]
+        if pattern and next(staged_refs(pattern, fragments, staged)) then
+            local machine, err = nfa.build({
+                {
+                    id = def.id,
+                    ast = pattern,
+                },
+            }, exact, limits.nfa, nil, true)
+            if not machine then
+                return nil, err
+            end
+            first, err = dfa.build(machine, {
+                [def.id] = TOKEN_RANK,
+            }, limits.dfa)
+            if not first then
+                return nil, err
+            end
+        end
+        if first or def.checks then
+            local list = {
+                first = first,
+            }
+            for i, ast in ipairs(def.checks or {}) do
                 local machine, err = nfa.build({
                     {
                         id = def.id,
                         ast = ast,
                     },
-                }, fragments, limits.nfa, preds)
+                }, exact, limits.nfa, preds)
                 if not machine then
                     return nil, err
                 end
@@ -723,9 +994,10 @@ local function build(grammar, limits)
         },
     }
     local diagnostics = {}
-    local defs, nfa_defs, leading_defs, rank, fragments =
+    local defs, nfa_defs, leading_defs, rank, fragments, staged =
         collect_definitions(grammar)
-    if check_recursion(diagnostics, fragments) then
+    if check_recursion(diagnostics, fragments, staged) or
+        check_staged_lookaheads(diagnostics, fragments, staged) then
         return nil, diagnostics
     end
 
@@ -753,24 +1025,42 @@ local function build(grammar, limits)
     end
 
     local compiled
-    compiled, err = build_delimited(grammar, defs, fragments, diagnostics,
-                                    limits)
+    compiled, err = build_delimited(grammar, defs, marked(fragments, staged),
+                                    diagnostics, limits)
     if not compiled then
         return too_large(diagnostics, err)
     end
 
     resolve_contextual(diagnostics, defs, d, rawget(grammar, 'skip'))
 
+    -- the fragments with the intersections of those written as arrays,
+    -- which the checks and the lookaheads match exactly
+    local exact
+    exact, err = build_exact(fragments, staged, limits, diagnostics)
+    if not exact then
+        return too_large(diagnostics, err)
+    end
+
     -- before the predicates, which the checks may add to
+    local asts = {}
+    for _, list in ipairs({
+        nfa_defs,
+        leading_defs,
+    }) do
+        for _, def in ipairs(list) do
+            asts[def.id] = def.ast
+        end
+    end
     local checks
-    checks, err = build_checks(defs, fragments, preds, limits, diagnostics)
+    checks, err = build_checks(defs, asts, fragments, exact, staged, preds,
+                               limits, diagnostics)
     if err then
         return too_large(diagnostics, err)
     end
 
     local predicates
     if #preds.list > 0 then
-        predicates, err = lookahead.build(preds, fragments, limits)
+        predicates, err = lookahead.build(preds, exact, limits)
         if not predicates then
             return too_large(diagnostics, err)
         end

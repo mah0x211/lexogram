@@ -80,11 +80,16 @@
 --     leading            an automaton of the same shape over the leading
 --                        tokens (listed in leading), which the automaton
 --                        above does not have; absent without them
---     checks             map from the kind id of a pattern token written
---                        as an array of patterns to the array of the
---                        automata of its patterns after the first (same
+--     checks             map from the kind id of a pattern token with
+--                        checks to { first, ... } (automata of the same
 --                        shape; their dispatch states use the predicates
---                        above); absent without such tokens
+--                        above): first, for a token whose pattern refers
+--                        to a fragment written as an array, is its first
+--                        pattern with the intersection of the patterns of
+--                        each such fragment and without its lookaheads;
+--                        the array has the automata of the patterns after
+--                        the first of a token written as an array. Absent
+--                        without such tokens
 --     open               an automaton of the same shape over the opens of
 --                        the delimited tokens; accept holds indexes into
 --                        delimited
@@ -125,7 +130,7 @@
 -- automaton, run from state 1 over the whole text of the token (a
 -- predicate sees only that text: its end is the end of the input), must
 -- end in a state with accept ~= 0; the token is invalid at the first check
--- that it fails.
+-- that it fails (first, then the array in order).
 --
 --   syntax    the rules as instructions (see lexogram.compile.codegen for
 --             the instruction set and the shape of each construct):
@@ -295,7 +300,9 @@ local function build_object(grammar, lexer, syntax)
     if lexer.checks then
         automata.checks = {}
         for id, list in next, lexer.checks do
-            local out = {}
+            local out = {
+                first = list.first and automaton(list.first),
+            }
             for i, d in ipairs(list) do
                 out[i] = automaton(d)
             end

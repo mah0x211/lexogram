@@ -299,8 +299,10 @@ end
 
 --- check returns kind and stop, with 'invalid' and the index of the first
 --- check of list that the text from pos to stop - 1 fails when there is
---- one (the index of its pattern in the array that defines the token).
---- @param list table[] the automata of the checks of kind
+--- one: 1 for the check of the first pattern with the fragments written as
+--- arrays (list.first), otherwise the index of its pattern in the array
+--- that defines the token.
+--- @param list table the checks of kind { first, ... }
 --- @param predicates table[]?
 --- @param kind integer
 --- @param source string
@@ -311,6 +313,10 @@ end
 --- @return string? problem 'invalid'
 --- @return integer? index
 local function check(list, predicates, kind, source, pos, stop)
+    local first = list.first
+    if first and not satisfies(first, predicates, source, pos, stop - 1) then
+        return kind, stop, 'invalid', 1
+    end
     for i = 1, #list do
         if not satisfies(list[i], predicates, source, pos, stop - 1) then
             return kind, stop, 'invalid', i + 1
@@ -531,9 +537,11 @@ end
 --- end of input; 'nested', with the position of the nested open as a fourth
 --- value, marks a delimited token whose nest is 'error' containing an open
 --- of itself (the token still ends at its first close); 'invalid', with the
---- index of the pattern as a fourth value, marks a pattern token whose text
---- fails a pattern after the first of the array that defines it (its kind
---- and stop are those of the first pattern).
+--- index of a pattern as a fourth value, marks a pattern token whose text
+--- fails a check (its kind and stop are those of the first pattern): 1 when
+--- a fragment written as an array that its first pattern refers to does
+--- not match all its patterns, otherwise a pattern after the first of the
+--- array that defines the token.
 --- source is a string, or an input made by input(source) for repeated
 --- calls on the same string, which keeps the values of the lookaheads
 --- computed for the whole input; with a string they are computed for the
