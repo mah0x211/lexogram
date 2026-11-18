@@ -1,5 +1,5 @@
 return {
     extends = 'lexogram:lua51',
     name = 'lua51',
-    version = '1.0.0',
+    version = '5.1.5-1',
 }

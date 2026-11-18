@@ -51,7 +51,7 @@ function testcase.grammar_is_lua51_with_a_leading_shebang()
         'shebang',
     })
     assert.equal(grammar.name, 'lua51_shebang')
-    assert.equal(grammar.version, '1.0.0')
+    assert.equal(grammar.version, '5.1.5-1')
     -- apart from its name and the shebang token, it is lua51
     grammar.name, grammar.version = lua51.name, lua51.version
     grammar.tokens.shebang = nil

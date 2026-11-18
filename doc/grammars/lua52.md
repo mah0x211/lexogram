@@ -18,9 +18,11 @@ The fields `lexogram`, `name` and `version` tell which grammar a file is, `exten
 | `embeds` | — | `{ 'lexogram:bom_shebang' }` |
 | `lexogram` | `'2026.11.15.1'` | `'2026.11.15.1'` |
 | `name` | `'lua52'` | `'lua52_shebang'` |
-| `version` | `'1.0.0'` | `'1.0.0'` |
+| `version` | `'5.2.4-1'` | `'5.2.4-1'` |
 | Built-in name | `lexogram:lua52` | `lexogram:lua52_shebang` |
 | Module | `lexogram.grammars.lua52` | `lexogram.grammars.lua52_shebang` |
+
+The version is `5.2.4-1`: the release of Lua 5.2 that the grammar was checked against, and the revision of the grammar, as for every built-in grammar (see [the grammar format](../grammar.md#metadata)). A change that breaks the rule names or the token names is listed in [the changes](#changes).
 
 `lua52` accepts the syntax as the parser of Lua 5.2 does (`load`). `lua52_shebang` is `lua52` with a UTF-8 byte order mark and a first line that starts with `#` skipped, as the file loader of Lua 5.2 (`luaL_loadfilex`, `lua`, `luac`) reads files; it differs from `lua52` only in the `tokens`, `skip` and `leading` fields, which the built-in mixin `lexogram:bom_shebang` (module `lexogram.grammars.bom_shebang`) adds: it extends `lexogram:shebang`, the mixin of `lua51_shebang`, and replaces its token.
 
@@ -143,3 +145,9 @@ The numbers and the escapes were also compared with `load` of Lua 5.2.4 on 2026-
 | Lua 5.4 | 0.22 s | 7.3 MB/s | 3.4 MB/s |
 | Lua 5.5 | 0.21 s | 7.2 MB/s | 3.4 MB/s |
 | LuaJIT 2.1 | 0.13 s | 104 to 110 MB/s | 23 to 32 MB/s |
+
+## Changes
+
+| Version | Change |
+|---|---|
+| `5.2.4-1` | The first version (2026-11-18). |

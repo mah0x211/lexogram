@@ -32,7 +32,7 @@
 --   lexogram  the specification revision in effect for the grammar (an
 --             entry of the revision history, not the grammar's own string)
 --   name      the name of the grammar
---   version   the version of the grammar (MAJOR.MINOR.PATCH)
+--   version   the version of the grammar (the string it gives)
 --   kinds     array indexed by kind id of { name, category, skip }:
 --               1 = { name = 'INVALID', category = 'error' }: a byte that
 --                   matches no token

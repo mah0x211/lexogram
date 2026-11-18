@@ -334,15 +334,16 @@ local function check_name(ctx, segments, value)
     end
 end
 
---- check_grammar_version checks the version of the grammar itself, which
---- is MAJOR.MINOR.PATCH.
+--- check_grammar_version checks the version of the grammar itself: a
+--- string of letters, digits, ".", "_", "+" and "-", whose meaning is the
+--- author's (lexogram does not compare versions).
 --- @param ctx table
 --- @param segments any[]
 --- @param value string
 local function check_grammar_version(ctx, segments, value)
-    if not find(value, '^%d+%.%d+%.%d+$') then
+    if not find(value, '^[0-9A-Za-z._+-]+$') then
         add_error(ctx, 'invalid_value', segments, label(segments) ..
-                      ' must be MAJOR.MINOR.PATCH, got ' .. quote(value))
+                      ' must match ^[0-9A-Za-z._+-]+$, got ' .. quote(value))
     end
 end
 

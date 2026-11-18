@@ -36,5 +36,5 @@ return assert(require('lexogram.grammar')({
     },
     lexogram = '2026.11.15.1',
     name = 'lua51_shebang',
-    version = '1.0.0',
+    version = '5.1.5-1',
 }))

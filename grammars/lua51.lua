@@ -25,8 +25,8 @@
 -- The rules follow the complete syntax of Lua in section 8 of the Lua 5.1
 -- reference manual; rule names come from the manual and from the Lua 5.1
 -- parser (lparser.c). Together with the token names they are a public
--- contract with consumers, and the version of the grammar follows it: a
--- renamed or removed name is a new major version. The sections below
+-- contract with consumers: a change that breaks it is listed in the
+-- changes of doc/grammars/lua51.md. The sections below
 -- follow the top-level fields of the table returned at the end of this
 -- file.
 --
@@ -39,7 +39,8 @@
 --   lexogram  '2026.11.15.1'
 --   name      'lua51', the built-in grammar "lexogram:lua51" (module
 --             lexogram.grammars.lua51)
---   version   '1.0.0'
+--   version   '5.1.5-1', the release of Lua it was checked against and the
+--             revision of the grammar
 --
 -- It accepts the syntax as the parser of Lua 5.1 does (loadstring);
 -- "lexogram:lua51_shebang" also skips a first line that starts with "#",
@@ -283,7 +284,7 @@
 return assert(require('lexogram.grammar')({
     lexogram = '2026.11.15.1',
     name = 'lua51',
-    version = '1.0.0',
+    version = '5.1.5-1',
     start = 'chunk',
     tokens = {
         name = [[ (ALPHA | "_") (ALPHA | DIGIT | "_")* ]],
