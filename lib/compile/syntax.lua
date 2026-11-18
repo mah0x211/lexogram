@@ -602,7 +602,7 @@ local function repeat_decision(ctx, name, node, conts)
     elseif not nullable and node.possessive and not greedy then
         local unneeded = ctx.unneeded
         unneeded[#unneeded + 1] = {
-            rule = name,
+            rule = shown(ctx, name),
             node = node,
             message = 'rules.' .. shown(ctx, name) .. ': ' .. operator ..
                 '+ is not' .. ' needed: the ' .. what .. ' is never ambiguous',
