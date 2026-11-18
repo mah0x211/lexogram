@@ -13,9 +13,14 @@ local CASES = 'lua51/'
 local AGREE = {
     'calls',
     'empty_statement',
+    'escape_too_large',
+    'exponent_then_dots',
+    'hex_exponent',
     'long_brackets',
+    'malformed_number',
     'nested_long_comment',
     'nested_long_string',
+    'number_touching_name',
     'numbers',
     'operators',
     'returns',
@@ -29,19 +34,16 @@ local AGREE = {
 
 -- cases that the grammars accept and Lua 5.1 rejects: checks that are not
 -- syntax (the target of an assignment, a statement that is not a call, a
--- break outside a loop, "..." outside a vararg function, a decimal escape
--- above 255), tokens that the official lexer rejects as a whole (a
--- malformed number), goto read as two expression statements, and a "("
--- that starts a line after an expression (the possessive _suffix*+ of
--- suffixedexp, where the official parser reports ambiguous syntax)
+-- break outside a loop, "..." outside a vararg function), goto read as two
+-- expression statements, and a "(" that starts a line after an expression
+-- (the possessive _suffix*+ of suffixedexp, where the official parser
+-- reports ambiguous syntax)
 local WIDER = {
     'ambiguous_call',
     'break_outside',
     'call_as_target',
-    'escape_too_large',
     'expression_statement',
     'goto',
-    'malformed_number',
     'vararg_outside',
 }
 

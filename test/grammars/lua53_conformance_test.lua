@@ -16,13 +16,18 @@ local AGREE = {
     'byte_order_mark_shebang',
     'call_on_new_line',
     'empty_statements',
+    'escape_too_large',
     'escapes',
+    'exponent_then_dots',
     'goto_as_name',
     'goto_label',
     'hex_floats',
     'integers',
     'invalid_escape',
+    'malformed_hex_float',
+    'malformed_number',
     'nested_long_brackets',
+    'number_touching_name',
     'operators',
     'return_semicolon',
     'shebang',
@@ -32,26 +37,22 @@ local AGREE = {
     'statement_after_return',
     'utf8_empty',
     'utf8_escape',
+    'utf8_too_large',
     'utf8_without_brace',
 }
 
 -- cases that the grammars accept and Lua 5.3 rejects: checks that are not
 -- syntax (the target of an assignment, a statement that is not a call, a
--- break outside a loop, "..." outside a vararg function, a decimal escape
--- above 255, a \u escape above 10FFFF, and the checks of goto: a missing
--- label, a jump into the scope of a local, a label defined twice), and
--- tokens that the official lexer rejects as a whole (malformed numbers)
+-- break outside a loop, "..." outside a vararg function, and the checks of
+-- goto: a missing label, a jump into the scope of a local, a label defined
+-- twice)
 local WIDER = {
     'break_outside',
     'call_as_target',
     'duplicate_label',
-    'escape_too_large',
     'expression_statement',
     'goto_into_scope',
     'goto_without_label',
-    'malformed_hex_float',
-    'malformed_number',
-    'utf8_too_large',
     'vararg_outside',
 }
 

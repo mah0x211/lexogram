@@ -45,9 +45,14 @@
 --
 -- tokens
 --
--- The tokens are those of lua53. A \u{XXX} escape may now write any value
--- below 2^31, which Lua 5.4 checks; the token takes any number of
--- hexadecimal digits, as in lua53.
+-- One token and one fragment change; the others are those of lua53.
+--
+--   number        the lexer reads one letter or "_" more after the run of
+--                 lua53 and rejects it as a malformed number, so every
+--                 number is not followed by (?![0-9A-Za-z_.]): 3print is
+--                 no number either
+--   _code_point   the digits of a value below 2^31 (\u{7FFFFFFF}; Lua 5.4
+--                 checks the value: \u{80000000} is an error)
 --
 -- rules
 --
@@ -68,17 +73,33 @@
 --
 -- The grammar accepts every source that Lua 5.4 accepts, and some that it
 -- rejects: those of lua53 (the checks that are not syntax, including those
--- of goto, and malformed numbers), with a \u escape at 80000000 or above
--- in place of one above 10FFFF; the checks of the attributes (a name other
--- than const or close, two <close> variables in one statement, an
--- assignment to a <const> variable); and a numeral that touches a letter
--- (3print), which the lexer of Lua 5.4 rejects as a malformed number, and
--- the grammar reads as a number and a name.
+-- of goto), and the checks of the attributes (a name other than const or
+-- close, two <close> variables in one statement, an assignment to a
+-- <const> variable).
 return assert(require('lexogram.grammar')({
     extends = 'lexogram:lua53',
     lexogram = '2026.11.15.1',
     name = 'lua54',
     version = '1.0.0',
+    tokens = {
+        -- the lexer reads hexadecimal digits, dots, exponent marks with
+        -- their signs and one letter or "_" more, and rejects the whole run
+        -- unless it is one number
+        ['=number'] = [[
+            (_integer ("." DIGIT*)? | "." _integer) _exponent?
+              (?![0-9A-Za-z_.])
+            | "0" ("x" | "X") (HEXDIGIT+ ("." HEXDIGIT*)? | "." HEXDIGIT+)
+              (("p" | "P") ("+" | "-")? _digits)? (?![0-9A-Za-z_.])
+        ]],
+        -- the hexadecimal digits of a value below 2^31, after the leading
+        -- zeros
+        ['=_code_point'] = [[
+            HEXDIGIT HEXDIGIT? HEXDIGIT? HEXDIGIT? HEXDIGIT? HEXDIGIT?
+            HEXDIGIT?
+            | [0-7] HEXDIGIT HEXDIGIT HEXDIGIT HEXDIGIT HEXDIGIT HEXDIGIT
+              HEXDIGIT
+        ]],
+    },
     ['++rules'] = {
         attnamelist = [[ name attrib? ("," name attrib?)* ]],
         attrib = [[ "<" name ">" ]],

@@ -30,7 +30,14 @@ The fields `lexogram`, `name` and `version` tell which grammar a file is, `exten
 
 ## tokens
 
-The tokens of [`lua53`](lua53.md#tokens). A `\u{XXX}` escape may now write any value below 2³¹ (`\u{7FFFFFFF}`), which Lua 5.4 checks; the token takes any number of hexadecimal digits, as in `lua53`. A hexadecimal integer that overflows wraps around, which is a matter of its value, not of the token.
+One token and one fragment change; the other tokens are those of [`lua53`](lua53.md#tokens).
+
+| Token | Lua 5.4 |
+|---|---|
+| `number` | The lexer of Lua 5.4 reads one letter or `_` more after the run of `lua53` and rejects it as a malformed number, so every number is not followed by `(?![0-9A-Za-z_.])`: `3print` is no number either |
+| `_code_point` | Fragment: the digits of a value below 2³¹ (`\u{7FFFFFFF}`); Lua 5.4 checks the value, so `\u{80000000}` is an error |
+
+A hexadecimal integer that overflows wraps around, which is a matter of its value, not of the token.
 
 ## symbols
 
@@ -84,17 +91,13 @@ The operators and their priorities are those of [`lua53`](lua53.md#expressions):
 
 ## Differences from Lua 5.4
 
-The grammars accept every source that Lua 5.4 accepts, and some that it rejects: those of [`lua53`](lua53.md#differences-from-lua-53), with a `\u` escape at 80000000 or above in place of one above 10FFFF, and the ones below. Each is a case in `test/grammars/lua54/`, compared with `luac` by `test/grammars/lua54_conformance_test.lua`:
+The grammars accept every source that Lua 5.4 accepts, and some that it rejects: those of [`lua53`](lua53.md#differences-from-lua-53), and the checks of the attributes below. Each is a case in `test/grammars/lua54/`, compared with `luac` by `test/grammars/lua54_conformance_test.lua`:
 
 | Source | Lua 5.4 | lexogram |
 |---|---|---|
-| `x = "\u{80000000}"` | `UTF-8 value too large` | a `string` token; the value of an escape is the consumer's to check |
 | `local x <other> = 1` | `unknown attribute 'other'` | an `attrib` with the name `other` |
 | `local a <close>, b <close> = nil, nil` | `multiple to-be-closed variables in local list` | two `attrib`s |
 | `local x <const> = 1; x = 2` | `attempt to assign to const variable 'x'` | a `localstat` and an `exprstat` |
-| `x = 3print(1)` | `malformed number near '3p'` | a number, then a call of `print`: two `exprstat`s |
-
-A numeral that touches a letter is new in Lua 5.4 (Lua 5.2 and 5.3 accept `3print(1)`); like the other malformed numbers, it is left as a difference for now.
 
 ## Conformance
 
@@ -105,13 +108,15 @@ find . -name '*.lua' | lua tools/conformance.lua --strip-bom --strip-shebang lex
 find . -name '*.lua' | lua tools/conformance.lua lexogram:lua54_shebang /path/to/luac5.4
 ```
 
+The numbers and the escapes were also compared with `load` of Lua 5.4.8 on 2026-11-18, in parentheses so that the pieces of a split token cannot form valid syntax (`x = (...)`): all 444,604 numeral-like sources (up to five characters of digits, `a`, `e`, `f`, `x`, `p`, `.`, `+`, `-`, `_` and `g`) and all 137,570 escape-like strings (a backslash and up to four characters) agreed.
+
 ## Performance
 
 `lua bench/tokenize.lua lexogram:lua54` and `lua bench/parse.lua lexogram:lua54` measure the grammar as for [`lua51`](lua51.md#performance) (best of 5 in one process, CPU time, 2026-11-18, local machine). On LuaJIT the speed differs between processes, as the traces that the compiler chooses differ; the range of five processes is shown.
 
 | Runtime | Compile | Tokenize | Parse to the event array |
 |---|---|---|---|
-| Lua 5.1 | 0.24 s | 5.8 MB/s | 2.5 MB/s |
-| Lua 5.4 | 0.19 s | 7.8 MB/s | 3.5 MB/s |
-| Lua 5.5 | 0.19 s | 7.6 MB/s | 3.5 MB/s |
-| LuaJIT 2.1 | 0.11 s | 97 to 104 MB/s | 22 to 32 MB/s |
+| Lua 5.1 | 0.38 s | 5.1 MB/s | 2.4 MB/s |
+| Lua 5.4 | 0.28 s | 7.4 MB/s | 3.4 MB/s |
+| Lua 5.5 | 0.28 s | 7.1 MB/s | 3.3 MB/s |
+| LuaJIT 2.1 | 0.16 s | 105 to 113 MB/s | 22 to 33 MB/s |

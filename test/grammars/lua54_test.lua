@@ -107,7 +107,13 @@ function testcase.grammar_extends_lua53()
     table.sort(names)
     table.sort(expected)
     assert.equal(names, expected)
-    -- the tokens and symbols are those of lua53
+    -- the tokens are those of lua53 but the number, which may not touch a
+    -- letter, and the code points of \u, which go up to 2^31; the symbols
+    -- are those of lua53
+    assert.not_equal(grammar.tokens.number, lua53.tokens.number)
+    assert.not_equal(grammar.tokens._code_point, lua53.tokens._code_point)
+    grammar.tokens.number, grammar.tokens._code_point = nil, nil
+    lua53.tokens.number, lua53.tokens._code_point = nil, nil
     assert.equal(grammar.tokens, lua53.tokens)
     assert.equal(grammar.symbols, lua53.symbols)
 end
@@ -196,23 +202,23 @@ function testcase.tokens_of_lua54()
         'name:const',
         '>:>',
     })
-    -- a \u escape may write any value below 2^31; the value is not checked
-    assert.equal(token_names('x = "\\u{7FFFFFFF}\\u{80000000}"'), {
+    -- a \u escape may write any value below 2^31
+    assert.equal(token_names('x = "\\u{7FFFFFFF}\\u{0000110000}"'), {
         'name:x',
         '=:=',
-        'string:"\\u{7FFFFFFF}\\u{80000000}"',
+        'string:"\\u{7FFFFFFF}\\u{0000110000}"',
     })
-    -- a numeral that touches a letter is a number and a name, which the
-    -- lexer of Lua 5.4 rejects as a malformed number
-    assert.equal(token_names('x = 3print(1)'), {
-        'name:x',
-        '=:=',
-        'number:3',
-        'name:print',
-        '(:(',
-        'number:1',
-        '):)',
-    })
+    -- a numeral that touches a letter is no number, as in the lexer of
+    -- Lua 5.4, nor is a \u escape of 2^31
+    for _, source in ipairs({
+        'x = 3print(1)',
+        'x = "\\u{80000000}"',
+        'x = 0x1p',
+    }) do
+        local result, err = lexogram.parse(compiled(), source)
+        assert.is_nil(result)
+        assert.equal(err.code, 'syntax_error')
+    end
 end
 
 function testcase.other_rules_are_those_of_lua53()
