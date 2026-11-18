@@ -348,7 +348,9 @@ local function tail_calls(code, from, to)
     end
 end
 
---- generate returns the syntax part of the compiled object.
+--- generate returns the syntax part of the compiled object. A rule of an
+--- alias (see lexogram.compile.syntax, result.alias_of) has the kind of the
+--- rule it names, and adds no kind.
 --- @param result table result of lexogram.compile.syntax.analyze
 --- @param start string the start rule
 --- @param first_kind integer the kind id of the first rule with a kind
@@ -362,6 +364,7 @@ local function generate(result, start, first_kind)
     sort(names, byte_less)
 
     local index, rules, kinds = {}, {}, {}
+    local kind_of = {}
     for i, name in ipairs(names) do
         index[name] = i
         local kind = 0
@@ -371,11 +374,20 @@ local function generate(result, start, first_kind)
                 id = kind,
                 name = name,
             }
+            kind_of[name] = kind
         end
         rules[i] = {
             name = name,
             kind = kind,
         }
+    end
+    -- the rule of an alias is reported with the kind of the aliased rule
+    local alias_of = result.alias_of or {}
+    for i, name in ipairs(names) do
+        local aliased = alias_of[name]
+        if aliased then
+            rules[i].kind = kind_of[aliased]
+        end
     end
 
     local g = {

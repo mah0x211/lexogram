@@ -185,6 +185,81 @@ end
 
 -- rules
 
+--- extract_aliases replaces each alias node of the rules (p->name) by a
+--- reference to a rule of its own, which matches p: it is named "_" ..
+--- rule .. "->" .. serial ("_chunk->1"), which no grammar can write (a
+--- name has no "-"), and it is reported with the kind of the aliased rule.
+--- It returns the aliased rule of each such rule and the rule of the
+--- grammar each comes from. The traversal is iterative; the rules are
+--- visited in name order, so the names are the same on every runtime.
+--- @param names string[] sorted rule names
+--- @param rules table name -> AST; changed in place
+--- @return table alias_of rule -> aliased rule
+--- @return table origin rule -> rule of the grammar
+local function extract_aliases(names, rules)
+    local alias_of, origin = {}, {}
+    local queue = {}
+    for i, name in ipairs(names) do
+        queue[i] = name
+    end
+    local serial = 0
+    local head = 1
+    while queue[head] do
+        local name = queue[head]
+        head = head + 1
+        local owner = origin[name] or name
+        local function lift(node)
+            serial = serial + 1
+            local rule = '_' .. owner .. '->' .. serial
+            rules[rule] = node.item
+            alias_of[rule] = node.name
+            origin[rule] = owner
+            queue[#queue + 1] = rule
+            return {
+                type = 'ref',
+                pos = node.pos,
+                name = rule,
+            }
+        end
+        if rules[name].type == 'alias' then
+            rules[name] = lift(rules[name])
+        end
+        local stack = {
+            rules[name],
+        }
+        while #stack > 0 do
+            local node = stack[#stack]
+            stack[#stack] = nil
+            local items = node.items
+            if items then
+                for i, item in ipairs(items) do
+                    if item.type == 'alias' then
+                        items[i] = lift(item)
+                    else
+                        stack[#stack + 1] = item
+                    end
+                end
+            elseif node.item then
+                if node.item.type == 'alias' then
+                    node.item = lift(node.item)
+                else
+                    stack[#stack + 1] = node.item
+                end
+            end
+        end
+    end
+    return alias_of, origin
+end
+
+--- shown returns the rule of the grammar that a rule comes from (itself, or
+--- the rule where the alias that made it is written), for diagnostics.
+--- @param ctx table
+--- @param name string
+--- @return string
+local function shown(ctx, name)
+    return ctx.origin[name] or name
+end
+
 --- parse_rules returns the sorted rule names and their ASTs.
 --- @param grammar table
 --- @return string[] names
@@ -235,8 +310,9 @@ local function check_skipped(ctx)
         for _, node in ipairs(preorder(ctx.rules[name])) do
             if node.type == 'ref' and skipped[node.name] and ctx.terminal(node) then
                 add_diagnostic(ctx, 'error', 'skipped_token',
-                               pair('rules', name), node.pos,
-                               'rules.' .. name .. ' refers to ' .. node.name ..
+                               pair('rules', shown(ctx, name)), node.pos,
+                               'rules.' .. shown(ctx, name) .. ' refers to ' ..
+                                   node.name ..
                                    ', which is listed in skip and never' ..
                                    ' reaches the parser')
             end
@@ -323,6 +399,19 @@ local function check_termination(ctx)
     local a = ctx.analysis
     local before = #ctx.diagnostics
     for _, cycle in ipairs(a.left_recursion) do
+        -- the rules of aliases are shown as the rules they are written in,
+        -- once
+        local list = {}
+        for _, name in ipairs(cycle) do
+            local rule = shown(ctx, name)
+            if rule ~= list[#list] then
+                list[#list + 1] = rule
+            end
+        end
+        if #list > 1 and list[#list] == list[1] then
+            list[#list] = nil
+        end
+        cycle = list
         add_diagnostic(ctx, 'error', 'left_recursion', pair('rules', cycle[1]),
                        nil,
                        'rule ' .. cycle[1] .. ' is left-recursive: ' ..
@@ -332,8 +421,8 @@ local function check_termination(ctx)
     for _, name in ipairs(ctx.names) do
         if not prod[name] then
             add_diagnostic(ctx, 'error', 'nonterminating_rule',
-                           pair('rules', name), nil,
-                           'rules.' .. name ..
+                           pair('rules', shown(ctx, name)), nil,
+                           'rules.' .. shown(ctx, name) ..
                                ' derives no finite token string, so it can' ..
                                ' never finish matching')
         end
@@ -383,10 +472,10 @@ local function choice_decision(ctx, name, node, conts)
             local shared = smallest(intersect(first2[i], first2[j]))
             if shared then
                 add_diagnostic(ctx, 'error', 'ambiguous_choice',
-                               pair('rules', name), node.pos,
-                               'rules.' .. name .. ': alternatives ' .. i ..
-                                   ' and ' .. j .. ' of the choice can both' ..
-                                   ' start with ' ..
+                               pair('rules', shown(ctx, name)), node.pos,
+                               'rules.' .. shown(ctx, name) .. ': alternatives ' ..
+                                   i .. ' and ' .. j ..
+                                   ' of the choice can both' .. ' start with ' ..
                                    render(ctx.names_of, shared))
             end
         end
@@ -466,8 +555,9 @@ local function repeat_decision(ctx, name, node, conts)
         [EPS] = true,
     })[EPS]
     if nullable then
-        add_diagnostic(ctx, 'error', 'nullable_repetition', pair('rules', name),
-                       node.pos, 'rules.' .. name .. ': the repeated element' ..
+        add_diagnostic(ctx, 'error', 'nullable_repetition',
+                       pair('rules', shown(ctx, name)), node.pos,
+                       'rules.' .. shown(ctx, name) .. ': the repeated element' ..
                            ' can match the empty string')
     end
 
@@ -501,8 +591,8 @@ local function repeat_decision(ctx, name, node, conts)
     end
     if not nullable and greedy and not node.possessive then
         add_diagnostic(ctx, 'error', 'ambiguous_repetition',
-                       pair('rules', name), node.pos,
-                       'rules.' .. name .. ': the ' .. what ..
+                       pair('rules', shown(ctx, name)), node.pos,
+                       'rules.' .. shown(ctx, name) .. ': the ' .. what ..
                            (what == 'optional element' and
                                ' can both be taken and skipped' or
                                ' can both continue and end') .. ' with ' ..
@@ -514,8 +604,8 @@ local function repeat_decision(ctx, name, node, conts)
         unneeded[#unneeded + 1] = {
             rule = name,
             node = node,
-            message = 'rules.' .. name .. ': ' .. operator .. '+ is not' ..
-                ' needed: the ' .. what .. ' is never ambiguous',
+            message = 'rules.' .. shown(ctx, name) .. ': ' .. operator ..
+                '+ is not' .. ' needed: the ' .. what .. ' is never ambiguous',
         }
     end
     return {
@@ -580,6 +670,14 @@ end
 --- @return table[] diagnostics { severity, code, segments, pos, message }
 local function analyze(grammar, lexer_result)
     local names, rules = parse_rules(grammar)
+    local alias_of, origin = extract_aliases(names, rules)
+    if next(alias_of) then
+        names = {}
+        for name in next, rules do
+            names[#names + 1] = name
+        end
+        sort(names, byte_less)
+    end
     local terminal, names_of, aliases = new_terminal(grammar, lexer_result.defs)
     local ctx = {
         grammar = grammar,
@@ -587,6 +685,7 @@ local function analyze(grammar, lexer_result)
         rules = rules,
         terminal = terminal,
         names_of = names_of,
+        origin = origin,
         diagnostics = {},
         unneeded = {},
     }
@@ -604,6 +703,7 @@ local function analyze(grammar, lexer_result)
     return {
         analysis = ctx.analysis,
         rules = rules,
+        alias_of = alias_of,
         decisions = decisions,
     }, ctx.diagnostics
 end
