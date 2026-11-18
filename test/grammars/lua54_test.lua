@@ -5,28 +5,15 @@ local events = require('lexogram.events')
 
 local COMPILED
 
--- run fn with the coverage hook removed: compiling the full grammar takes
--- far too long under luacov's line hook
-local function without_hook(fn, ...)
-    local hook, mask, count = debug.gethook()
-    debug.sethook()
-    local res = {
-        pcall(fn, ...),
-    }
-    if hook then
-        debug.sethook(hook, mask, count)
-    end
-    if not res[1] then
-        error(res[2], 0)
-    end
-    return res[2], res[3]
-end
+-- the file is loaded before the test runner moves to its directory, so the
+-- helper is found next to the file itself
+local shared = dofile(debug.getinfo(1, 'S').source:match('^@(.-)[^/]*$') ..
+                          'shared.lua')
 
 local function compiled()
     if not COMPILED then
-        local grammar = assert(lexogram.load('lexogram:lua54'))
         local diagnostics
-        COMPILED, diagnostics = without_hook(lexogram.compile, grammar)
+        COMPILED, diagnostics = shared.compile('lexogram:lua54')
         assert.equal(diagnostics, {})
     end
     return COMPILED
@@ -83,8 +70,8 @@ local function token_names(source)
 end
 
 function testcase.grammar_extends_lua53()
-    local grammar = assert(lexogram.load('lexogram:lua54'))
-    local lua53 = assert(lexogram.load('lexogram:lua53'))
+    local grammar = assert(shared.load('lexogram:lua54'))
+    local lua53 = assert(shared.load('lexogram:lua53'))
 
     assert.equal(grammar.name, 'lua54')
     assert.equal(grammar.version, '1.0.0')
@@ -107,7 +94,13 @@ function testcase.grammar_extends_lua53()
     table.sort(names)
     table.sort(expected)
     assert.equal(names, expected)
-    -- the tokens and symbols are those of lua53
+    -- the tokens are those of lua53 but the number, which may not touch a
+    -- letter, and the code points of \u, which go up to 2^31; the symbols
+    -- are those of lua53
+    assert.not_equal(grammar.tokens.number, lua53.tokens.number)
+    assert.not_equal(grammar.tokens._code_point, lua53.tokens._code_point)
+    grammar.tokens.number, grammar.tokens._code_point = nil, nil
+    lua53.tokens.number, lua53.tokens._code_point = nil, nil
     assert.equal(grammar.tokens, lua53.tokens)
     assert.equal(grammar.symbols, lua53.symbols)
 end
@@ -196,23 +189,23 @@ function testcase.tokens_of_lua54()
         'name:const',
         '>:>',
     })
-    -- a \u escape may write any value below 2^31; the value is not checked
-    assert.equal(token_names('x = "\\u{7FFFFFFF}\\u{80000000}"'), {
+    -- a \u escape may write any value below 2^31
+    assert.equal(token_names('x = "\\u{7FFFFFFF}\\u{0000110000}"'), {
         'name:x',
         '=:=',
-        'string:"\\u{7FFFFFFF}\\u{80000000}"',
+        'string:"\\u{7FFFFFFF}\\u{0000110000}"',
     })
-    -- a numeral that touches a letter is a number and a name, which the
-    -- lexer of Lua 5.4 rejects as a malformed number
-    assert.equal(token_names('x = 3print(1)'), {
-        'name:x',
-        '=:=',
-        'number:3',
-        'name:print',
-        '(:(',
-        'number:1',
-        '):)',
-    })
+    -- a numeral that touches a letter is no number, as in the lexer of
+    -- Lua 5.4, nor is a \u escape of 2^31
+    for _, source in ipairs({
+        'x = 3print(1)',
+        'x = "\\u{80000000}"',
+        'x = 0x1p',
+    }) do
+        local result, err = lexogram.parse(compiled(), source)
+        assert.is_nil(result)
+        assert.equal(err.code, 'syntax_error')
+    end
 end
 
 function testcase.other_rules_are_those_of_lua53()
@@ -220,8 +213,8 @@ function testcase.other_rules_are_those_of_lua53()
     -- (lparser.c), so the rules of expressions, as every rule other than
     -- those of local statements, are those of lua53, whose trees
     -- test/grammars/lua53_expression_test.lua checks
-    local rules = assert(lexogram.load('lexogram:lua54')).rules
-    local lua53 = assert(lexogram.load('lexogram:lua53')).rules
+    local rules = assert(shared.load('lexogram:lua54')).rules
+    local lua53 = assert(shared.load('lexogram:lua53')).rules
     rules.localstat, rules.attnamelist, rules.attrib = nil, nil, nil
     lua53.localstat = nil
     assert.equal(rules, lua53)

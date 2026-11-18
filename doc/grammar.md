@@ -23,7 +23,6 @@ local result, err = lexogram.parse(compiled, source)
 - [skip](#skip)
 - [leading](#leading)
 - [rules](#rules)
-- [greedy](#greedy)
 - [recover](#recover)
 - [extends](#extends)
 - [Mixins](#mixins): `mixin`, `embeds`
@@ -86,7 +85,6 @@ return assert(require('lexogram.grammar')({
 | `skip` | | array of token names | Tokens skipped between the elements of the rules |
 | `leading` | | array of pattern token names | Tokens tried at the start of the input only |
 | `rules` | yes | table | Name → pattern |
-| `greedy` | | array of rule names | Rules whose repetitions are greedy by intent |
 | `recover` | | array of rule names | Rules to recover in after a syntax error (not implemented yet) |
 | `extends` | | grammar name | The grammar this one is a difference of; resolved by `lexogram.load` |
 | `embeds` | | array of mixin names | The [mixins](#mixins) applied after the base; needs `extends` |
@@ -181,8 +179,27 @@ keywords = { 'if', 'then', 'end', ignore_case = true },
 ```
 
 - An empty item, an item twice in one array, and an item in both arrays are errors.
-- The only setting of the hash part is `ignore_case`: when true, ASCII letters match in either case.
+- The settings of the hash part are `ignore_case` (when true, ASCII letters match in either case) and, in `keywords` only, `contextual` (see below).
 - A table as an item is reserved for a later revision.
+
+### Contextual keywords
+
+`keywords.contextual` lists keywords that are not reserved: words that are keywords only where the rules expect them, and names elsewhere, such as `global` of Lua 5.5.
+
+```lua
+keywords = { 'local', 'function', contextual = { 'global' } },
+rules = {
+    -- the declaration is tried first; global = 1 is an assignment
+    stat = [[ globalstat / exprstat ]],
+    globalstat = [[ "global" name ]],
+    ...
+},
+```
+
+- A contextual keyword is not a token of its own: its text is read as the pattern token that matches it (here `name`), which must be exactly one pattern token, not listed in `skip` (`invalid_contextual`). `lexogram.tokenize` returns that token.
+- In rules, `"global"` matches a token of that kind whose text is `global` (after ASCII folding with `ignore_case`), and `name` matches it too. The token has the kind of the keyword in the events where the rules matched the keyword, and the kind `name` elsewhere.
+- No rule makes the keyword win: an alternative that starts with `"global"` and one that starts with `name` are ambiguous unless two tokens tell them apart (`ambiguous_choice`). Write an [ordered choice](#how-rules-are-applied) `/` to try the keyword first; it is tried only when the next token is the keyword.
+- An item that is also an item of `keywords` or `symbols` is an error (`duplicate_item`). Its kind follows those of the keywords in the compiled object, with the category `keyword` and `base` (the kind of the token it is read as).
 
 ## skip
 
@@ -209,10 +226,6 @@ The syntax, as a table from names to patterns (see [Patterns](#patterns)). A rul
 - Which alternative of a choice was taken leaves no trace in the events, so a structure that consumers must tell apart is a rule of its own.
 - Rules may be recursive, but a rule that reaches itself without consuming a token (left recursion) is an error.
 - Expressions are written flat, without precedence: `expr = [[ unop* operand (binop unop* operand)* ]]`; a consumer applies the precedence of its language.
-
-## greedy
-
-The rules where a repetition (`?`, `*`, `+`) cannot tell from two tokens of lookahead whether to take one more element or to go on, and where the greedy choice (take the element) is the intended one. Declaring them confirms that intent: a rule with such a spot that is not in `greedy` is warned about (`undeclared_greedy`), and a rule in `greedy` without one too (`unneeded_greedy`). See [How rules are applied](#how-rules-are-applied).
 
 ## recover
 
@@ -266,7 +279,7 @@ rules = { ['=_stat'] = [[ ... | gotostat ]] },  -- replace a rule
 tokens = { ['--long_string'] = { 'nest' } },    -- remove a setting of a token
 ```
 
-- The target `X` must exist in the base. The top-level table fields (`tokens`, `rules`, `symbols`, `keywords`, `skip`, `leading`, `greedy`, `recover`) exist as empty tables when the base has none.
+- The target `X` must exist in the base. The top-level table fields (`tokens`, `rules`, `symbols`, `keywords`, `skip`, `leading`, `recover`) exist as empty tables when the base has none.
 - In one table, removals (`-`, `--`) are applied first, then replacements and entered tables (`=`, unmarked), then additions (`+`, `++`). `=X` and `X` together are an error.
 - `extends`, `embeds`, `mixin`, `lexogram`, `name` and `version` are written without a mark. `lexogram` is inherited when it is not written; `name` and `version` are not inherited, so that a derived grammar never keeps the name of its base. `start` is replaced with `['=start']`.
 - An error of the merge is returned by `lexogram.load` as `nil, "<file>: <path>: <reason>"`.
@@ -318,8 +331,9 @@ return {
 pattern  = choice
 choice   = sequence ("|" sequence)* | sequence ("/" sequence)*
 sequence = repeat+
-repeat   = primary ("?" | "*" | "+")?
+repeat   = primary (("?" | "*" | "+") "+"?)?
 primary  = literal | class | name | "(" choice ")"
+         | "(?=" choice ")" | "(?!" choice ")"
 ```
 
 | Notation | Meaning | In `tokens` | In `rules` |
@@ -331,9 +345,11 @@ primary  = literal | class | name | "(" choice ")"
 | `A \| B` | Choice, independent of order | yes | yes |
 | `A / B` | Ordered choice (tried in order) | no | yes |
 | `A?`, `A*`, `A+` | Optional, zero or more, one or more | yes | yes |
+| `A?+`, `A*+`, `A++` | The same, possessive: the greedy choice is intended where it is ambiguous (see [How rules are applied](#how-rules-are-applied)) | no | yes |
 | `(A)` | Grouping | yes | yes |
+| `(?=A)`, `(?!A)` | Lookahead, positive and negative: consumes nothing (see [Lookaheads](#lookaheads)) | yes | no |
 
-- Postfix operators bind tighter than sequences, and sequences tighter than choices. `|` and `/` cannot be mixed in one choice; group one of them with parentheses.
+- Postfix operators bind tighter than sequences (the `+` of a possessive operator follows the operator directly, without white space), and sequences tighter than choices. `|` and `/` cannot be mixed in one choice; group one of them with parentheses.
 - White space outside quotes and brackets is ignored. Patterns are written in Lua long brackets (`[[ ... ]]`), where the escapes of Lua do not apply; a pattern that contains `]]` is written in `[=[ ... ]=]`.
 - Escapes in literals and classes: `\\`, `\"`, `\n`, `\r`, `\t`, `\xHH` (one byte) and `\u{H...}` (a code point); in classes also `\]`, `\-` and `\^`. Other punctuation is reserved for later operators and is an error.
 - Parentheses nest at most 100 deep.
@@ -349,24 +365,38 @@ primary  = literal | class | name | "(" choice ")"
 | `HEXDIGIT` | `[0-9A-Fa-f]` |
 | `ANY` | Any one byte |
 
+### Lookaheads
+
+`(?= p )` holds where the input from that position starts with a string of `p`, and `(?! p )` where it starts with none; they consume nothing, as in regular expressions. The input they see goes on after the token. A number that must not touch a letter, a dot or another digit:
+
+```lua
+number = [[ DIGIT+ ("." DIGIT+)? (?![0-9A-Za-z_.]) ]],
+```
+
+- `p` can be any pattern: choices, repetitions, fragments and nested lookaheads, of any length. Fragments still cannot be recursive, so a lookahead keeps the patterns regular.
+- Lookaheads are allowed in pattern tokens, fragments and leading tokens. In a delimited token table (`open`, `close`, `prefix`, a capture, also through a fragment) and in `rules` they are errors (`lookahead_not_allowed`); a repeated lookahead (`(?=A)*`) is `invalid_lookahead`.
+- A token is chosen by longest match, as below: at each length its lookaheads are evaluated, and the longest length at which the whole pattern holds is the match. In `[0-9]+ (?![a-z])`, the input `12a` gives the token `1`, which is followed by `2`, not a letter; write `(?![0-9a-z])` for "the whole run of digits, not followed by a letter".
+- Two pattern tokens conflict when they can match the same string at the same position with both lookaheads holding on the same input. A token cannot be preferred over another, so tokens that differ by a lookahead are written with complementary conditions (`(?=p)` and `(?!p)`).
+- Cost: a lookahead whose result is known after a bounded number of bytes is evaluated where needed; one without a bound (such as `(?="a"* "b")`) is computed for every position of the input once, from its end. `lexogram.parse` does this once per call; for repeated calls of `lexogram.tokenize` on one input, make an input of it once with `lexogram.input(source)` and pass that instead of the string (`tokenize(compiled, input, pos)`): the input holds the source with the values computed for it. Given a string, a lookahead without a bound is evaluated where it is needed, which may read up to the end of the input.
+
 ## How tokens are chosen
 
 At a position of the source, the token is chosen in this order:
 
 1. At position 1 only, the longest match of the leading tokens, if any.
 2. The delimited token whose open matches; of several, the longest open.
-3. The longest match of the pattern tokens and the literals.
+3. The longest match of the pattern tokens and the literals (a pattern with lookaheads matches at a length only where they hold there).
 4. Of a pattern token and a literal of the same length, the literal.
 5. A byte that starts no token is an `INVALID` token of one byte.
 
-Two pattern tokens (or two leading tokens) that can match the same whole string are an error, and so are two opens of delimited tokens; the diagnostic shows the shortest such string. A pattern token that never wins, because a literal or a longer token always takes its strings, is warned about (`never_adopted`).
+Two pattern tokens (or two leading tokens) that can match the same whole string are an error (with lookaheads, only when both can hold on the same input), and so are two opens of delimited tokens; the diagnostic shows the shortest such string. A pattern token that never wins, because a literal or a longer token always takes its strings, is warned about (`never_adopted`).
 
 ## How rules are applied
 
 The analysis is deterministic and looks at most two tokens ahead (skipped tokens are not counted).
 
 - **Choice `|`**: the alternatives must be told apart by the next two tokens; otherwise it is an error (`ambiguous_choice`). As long as they can be told apart, their order does not matter.
-- **Repetition `?`, `*`, `+`**: greedy. When the next tokens can start the element, the element is taken. Where they could also follow the repetition, the greedy choice decides the result; such a rule is declared in `greedy`.
+- **Repetition `?`, `*`, `+`**: greedy, without backtracking. When the next tokens can start the element, the element is taken. Where two tokens of lookahead cannot tell whether to take the element or to go on, the repetition is ambiguous: that is an error (`ambiguous_repetition`), as for a choice, unless the repetition is written possessive (`?+`, `*+`, `++`), which declares that the greedy choice is intended. A possessive repetition parses the same way; one that is not ambiguous is warned about (`unneeded_possessive`). For example, in `name* name?` the `name?` can never match, which is likely a mistake and is reported; a grammar that means it writes `name*+ name?`.
 - **Ordered choice `/`** (rules only): the first alternative is tried; if a syntax error occurs inside it, the input and the events are rewound to its start and the next alternative is tried. Once an alternative succeeds it is kept, even if a later part fails. When the next token cannot start an alternative, it is not tried. The overlap of the alternatives is not checked: their order decides. Nested trials can cost much time; use them only where two tokens cannot decide.
 - **Syntax errors**: the analysis stops with `nil` and `{ code, pos, line, column, expected, actual, message }`.
 
@@ -390,8 +420,8 @@ The compilation also rejects a repetition of an element that can match nothing (
 | Kind | Codes |
 |---|---|
 | Structure | `invalid_type`, `missing_field`, `unknown_field`, `invalid_key`, `invalid_value`, `invalid_version`, `version_too_new`, `version_too_old`, `empty_item`, `duplicate_item`, `reserved_item`, `invalid_name`, `reserved_name`, `duplicate_name`, `undefined_reference`, `invalid_reference`, `undeclared_literal` |
-| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
-| Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `automaton_too_large` |
-| Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice` |
-| Warnings | `never_adopted`, `undeclared_greedy`, `unneeded_greedy`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
+| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `lookahead_not_allowed`, `invalid_lookahead`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
+| Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `invalid_contextual`, `automaton_too_large` |
+| Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice`, `ambiguous_repetition` |
+| Warnings | `never_adopted`, `unneeded_possessive`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
 | Warnings of the merge | `already_defined` (a [mixin](#mixins) adds what exists; returned by `lexogram.load`, `lexogram.merge` and `lexogram.grammar`, with the mixin as `source`) |

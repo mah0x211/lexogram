@@ -9,24 +9,10 @@ local assert = require('assert')
 local lexogram = require('lexogram')
 local events = require('lexogram.events')
 
---- without_hook runs fn with the coverage hook removed: compiling a full
---- grammar takes far too long under luacov's line hook.
---- @param fn function
---- @return any
-local function without_hook(fn, ...)
-    local hook, mask, count = debug.gethook()
-    debug.sethook()
-    local res = {
-        pcall(fn, ...),
-    }
-    if hook then
-        debug.sethook(hook, mask, count)
-    end
-    if not res[1] then
-        error(res[2], 0)
-    end
-    return res[2], res[3]
-end
+-- the shared helpers, next to this file
+local shared = dofile(debug.getinfo(1, 'S').source:match('^@(.-)[^/]*$') ..
+                          'shared.lua')
+local without_hook = shared.without_hook
 
 --- new returns the function tree_of(source) of the built-in grammar name,
 --- which parses "return " .. source and returns the tree of its first
@@ -44,8 +30,7 @@ local function new(name, priority, unary)
 
     local function compiled()
         if not COMPILED then
-            local grammar = assert(lexogram.load(name))
-            COMPILED = assert(without_hook(lexogram.compile, grammar))
+            COMPILED = assert(shared.compile(name))
         end
         return COMPILED
     end

@@ -39,6 +39,13 @@
 -- the EXIT of a rule stops at its last valid token or at the stop of an
 -- empty rule inside it, whichever is later, so that ranges always nest.
 --
+-- A contextual keyword is a token of its base kind with its text (see
+-- lexogram.compile): such a token gets the kind of the keyword when it is
+-- read, which the decisions have wherever the base kind can come (see
+-- lexogram.compile.ll), and a MATCH of the base kind takes it too and
+-- writes it with the base kind. Only tokens of a base kind are compared,
+-- and only those of the length of a keyword read their text.
+--
 -- A backtrack point (TRY) saves the event count, the start of the first
 -- raw token not yet written, the call stack depth and the last valid
 -- token; rewinding drops the events after it, empties the lookahead and
@@ -55,7 +62,11 @@ local next = next
 local ipairs = ipairs
 local sort = table.sort
 local concat = table.concat
-local tokenize = require('lexogram.tokenizer').tokenize
+local sub = string.sub
+local lower = string.lower
+local tokenizer = require('lexogram.tokenizer')
+local tokenize = tokenizer.tokenize
+local new_input = tokenizer.input
 local quote = require('lexogram.text').quote
 local codegen = require('lexogram.compile.codegen')
 local events_module = require('lexogram.events')
@@ -165,6 +176,30 @@ local function skip_set(kinds)
     return set
 end
 
+--- contextual_tables returns, for the contextual keywords of kinds, the
+--- keywords of each base kind as an array of { kind, text, ignore_case }
+--- (text lowered when ignore_case) and the base kind of each keyword.
+--- @param kinds table
+--- @return table by_base base kind -> array
+--- @return table base_of keyword kind -> base kind
+local function contextual_tables(kinds)
+    local by_base, base_of = {}, {}
+    for k, kind in ipairs(kinds) do
+        local base = kind.base
+        if base then
+            local list = by_base[base] or {}
+            list[#list + 1] = {
+                k,
+                kind.ignore_case and lower(kind.name) or kind.name,
+                kind.ignore_case,
+            }
+            by_base[base] = list
+            base_of[k] = base
+        end
+    end
+    return by_base, base_of
+end
+
 --- parse analyzes source with the compiled grammar.
 --- @param compiled table result of lexogram.compile
 --- @param source string
@@ -181,6 +216,7 @@ local function parse(compiled, source)
     local syntax = compiled.syntax
     local code, decisions, rules = syntax.code, syntax.decisions, syntax.rules
     local skipped = skip_set(kinds)
+    local by_base, base_of = contextual_tables(kinds)
     local len = #source
 
     -- events
@@ -193,6 +229,8 @@ local function parse(compiled, source)
     local qk, qs, qe = {}, {}, {}
     local qh, qt = 1, 0
     local raw_pos = 1
+    -- the source with the values of its lookaheads (see lexogram.tokenizer)
+    local input = new_input(source)
     local failure -- error of a delimited token
 
     -- frames: return address, rule kind, ENTER event number, start, and
@@ -215,7 +253,21 @@ local function parse(compiled, source)
         if raw_pos > len or failure then
             return false
         end
-        local k, stop, problem, at = tokenize(compiled, source, raw_pos)
+        local k, stop, problem, at = tokenize(compiled, input, raw_pos)
+        local keywords = by_base[k]
+        if keywords then
+            local n = stop - raw_pos
+            for _, kw in ipairs(keywords) do
+                local text = kw[2]
+                if #text == n then
+                    local s = sub(source, raw_pos, stop - 1)
+                    if (kw[3] and lower(s) or s) == text then
+                        k = kw[1]
+                        break
+                    end
+                end
+            end
+        end
         qt = qt + 1
         qk[qt], qs[qt], qe[qt] = k, raw_pos, stop
         if problem == 'unterminated' then
@@ -354,9 +406,9 @@ local function parse(compiled, source)
         if op == MATCH then
             local k = code[pc + 1]
             local t, i = peek(1)
-            if t == k and i then
+            if (t == k or base_of[t] == k) and i then
                 flush(i)
-                emit(TOKEN_EVENT, t, qs[i], qe[i])
+                emit(TOKEN_EVENT, k, qs[i], qe[i])
                 last_stop, last_token = qe[i], count
                 qh = i + 1
                 if qh > qt then
@@ -448,7 +500,8 @@ local function parse(compiled, source)
         end
         if not pc then
             local t, i = peek(1)
-            err = syntax_error(kinds, i and qs[i] or len + 1, t,
+            -- a contextual keyword that is not expected is its base kind
+            err = syntax_error(kinds, i and qs[i] or len + 1, base_of[t] or t,
                                expected_kinds(exp, nexp))
             break
         end

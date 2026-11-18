@@ -59,24 +59,9 @@ local function find_luac(version, env, test)
     return nil
 end
 
---- without_hook runs fn with the coverage hook removed: compiling a full
---- grammar takes far too long under luacov's line hook.
---- @param fn function
---- @return any
-local function without_hook(fn, ...)
-    local hook, mask, count = debug.gethook()
-    debug.sethook()
-    local res = {
-        pcall(fn, ...),
-    }
-    if hook then
-        debug.sethook(hook, mask, count)
-    end
-    if not res[1] then
-        error(res[2], 0)
-    end
-    return res[2], res[3]
-end
+-- the shared helpers, next to this file
+local shared = dofile(debug.getinfo(1, 'S').source:match('^@(.-)[^/]*$') ..
+                          'shared.lua')
 
 local COMPILED = {}
 
@@ -85,8 +70,7 @@ local COMPILED = {}
 --- @return table
 local function compiled(name)
     if not COMPILED[name] then
-        local grammar = assert(lexogram.load(name))
-        COMPILED[name] = assert(without_hook(lexogram.compile, grammar))
+        COMPILED[name] = assert(shared.compile(name))
     end
     return COMPILED[name]
 end

@@ -32,20 +32,28 @@ The rule that must cover the whole input: `chunk`, which is a `block`.
 
 ## tokens
 
-The tokens of Lua 5.1: names, numbers, short strings, comments and white space are patterns; long strings and long comments are delimited tokens, because their close repeats the level of their open. The two parts with `_` are fragments of the number pattern, not tokens.
+The tokens of Lua 5.1: names, numbers, short strings, comments and white space are patterns; long strings and long comments are delimited tokens, because their close repeats the level of their open. The parts with `_` are fragments of the number and string patterns, not tokens.
 
 Pattern tokens:
 
 | Token | Matches |
 |---|---|
 | `name` | `[A-Za-z_][A-Za-z0-9_]*` |
-| `number` | `3`, `3.0`, `3.`, `.5`, `314.16e-2`, `0x56` |
-| `string` | `"..."` and `'...'`; a backslash may be followed by any byte (`\n`, `\\`, `\ddd`, a backslash and a line break); a line break without a backslash cannot be inside it |
+| `number` | `3`, `3.0`, `3.`, `.5`, `314.16e-2`, `0x56`, `0x1p4`: `_decimal`, `_decimal _exponent`, or `0x` and hexadecimal digits with an optional `p` and decimal digits, as `strtod` reads them. The lexer of Lua 5.1 reads digits and dots, an exponent mark with its sign, then letters, digits and `_`, and rejects the whole run unless it is one number; so a number is not followed by what the lexer would read on: `(?![0-9A-Za-z_.])`, or `(?![0-9A-Za-z_])` after an exponent or a hexadecimal number. `3e`, `1..2`, `3print` and `0x1p+4` are no numbers, and `1e5..x` is `1e5 .. x` |
+| `string` | `"..."` and `'...'` with `_escape`; a line break without a backslash cannot be inside it |
 | `comment` | `--` and the rest of the line |
 | `space` | Space, tab, carriage return, line feed, vertical tab and form feed |
 | `shebang` | `lua51_shebang` only: `#` and the rest of the line (a leading token, see `leading`) |
 
-Fragments (parts of the patterns above, not tokens): `_digits` (`DIGIT+`) and `_exponent` (`("e" | "E") ("+" | "-")? _digits`).
+Fragments (parts of the patterns above, not tokens):
+
+| Fragment | Matches |
+|---|---|
+| `_decimal` | `_digits ("." DIGIT*)? \| "." _digits` |
+| `_digits` | `DIGIT+` |
+| `_exponent` | `("e" \| "E") ("+" \| "-")? _digits` |
+| `_escape` | A backslash and a line break (`\r\n`, `\n\r`, `\n` or `\r`), any other byte that is no digit (`\n`, `\\`, `\q`), or `_decimal_escape` |
+| `_decimal_escape` | One to three digits, as many as there are, up to 255 (`\0`, `\65`, `\255`; `\256` is an error, as in Lua 5.1) |
 
 Delimited token tables:
 
@@ -128,7 +136,7 @@ Rules with events (an ENTER and an EXIT around their range):
 | `exp` | `unop* _simpleexp (binop unop* _simpleexp)*`: terms and operators in order, without precedence |
 | `unop` | `"-" \| "not" \| "#"` |
 | `binop` | `"+" \| "-" \| "*" \| "/" \| "^" \| "%" \| ".." \| "<" \| "<=" \| ">" \| ">=" \| "==" \| "~=" \| "and" \| "or"` |
-| `suffixedexp` | `_primaryexp _suffix*`: a variable, a call or a parenthesized expression with its suffixes |
+| `suffixedexp` | `_primaryexp _suffix*+`: a variable, a call or a parenthesized expression with its suffixes |
 | `args` | `"(" explist? ")" \| tableconstructor \| string \| long_string \| long_string_level` |
 | `functiondef` | `"function" body` |
 | `body` | `"(" parlist? ")" block "end"` |
@@ -149,9 +157,7 @@ Rules without events (their names start with `_`; their contents belong to the e
 | `_field` | `recfield \| listfield` |
 | `_fieldsep` | `"," \| ";"` |
 
-## greedy
-
-The rules whose repetition goes on as long as the next token can continue it, where the grammar would otherwise be ambiguous: `suffixedexp`. A `(` after an expression is always read as call arguments, even at the start of a line, as the parser of Lua 5.1 does (it also reports such a call that starts a new line as ambiguous syntax; see the differences below).
+**Possessive repetition**: the `_suffix*+` of `suffixedexp` goes on as long as the next token can continue it, where the grammar would otherwise be ambiguous (see [How rules are applied](../grammar.md#how-rules-are-applied)). A `(` after an expression is always read as call arguments, even at the start of a line, as the parser of Lua 5.1 does (it also reports such a call that starts a new line as ambiguous syntax; see the differences below).
 
 ## recover
 
@@ -186,7 +192,7 @@ So `-x ^ 2` is `-(x ^ 2)` and `2 ^ -3` is `2 ^ (-3)`. `test/grammars/lua51_expre
 
 ## Differences from Lua 5.1
 
-The grammars accept every source that Lua 5.1 accepts, and some that it rejects. The grammar describes the syntax only. The parser of Lua 5.1 also makes checks that are not syntax, and its lexer rejects some tokens as a whole, so the grammar accepts these sources although `luac -p` of Lua 5.1 rejects them (each is a case in `test/grammars/lua51/`, compared with `luac` by `test/grammars/lua51_conformance_test.lua`):
+The grammars accept every source that Lua 5.1 accepts, and some that it rejects. The grammar describes the syntax only. The parser of Lua 5.1 also makes checks that are not syntax, so the grammar accepts these sources although `luac -p` of Lua 5.1 rejects them (each is a case in `test/grammars/lua51/`, compared with `luac` by `test/grammars/lua51_conformance_test.lua`):
 
 | Source | Lua 5.1 | lexogram |
 |---|---|---|
@@ -196,9 +202,7 @@ The grammars accept every source that Lua 5.1 accepts, and some that it rejects.
 | `goto continue` | syntax error (`goto` is a name in Lua 5.1) | two `exprstat`s |
 | `break` outside a loop | `no loop to break` | a `breakstat` |
 | `function f() return ... end` | `cannot use '...' outside a vararg function` | `...` as an expression |
-| `x = "\300"` | `escape sequence too large` | a `string` token; the value of an escape is the consumer's to check |
-| `x = 3e` | `malformed number near '3e'` | the number `3` and the name `e`, two `exprstat`s |
-| `a = b` + new line + `(f)()` | `ambiguous syntax (function call x new statement)` | a call `b(f)()` (`greedy`) |
+| `a = b` + new line + `(f)()` | `ambiguous syntax (function call x new statement)` | a call `b(f)()` (`_suffix*+`) |
 
 A consumer that needs the official behavior checks the event array: an `exprstat` must have `=` or end with `args`, and so on.
 
@@ -211,20 +215,22 @@ Other differences:
 
 ## Conformance
 
-How the grammars were compared with the official compiler. On 2026-11-17 the grammars agreed with `luac -p` of Lua 5.1.5 on all 24 files of the official Lua 5.1 test suite, and on 7,904 of 7,908 Lua files of this and nearby repositories; the official compiler accepted no file that `lua51` rejects (with a first `#` line blanked) or that `lua51_shebang` rejects, and the other four files were the plain text above. `tools/conformance.lua` repeats the comparison on any list of files:
+How the grammars were compared with the official compiler. On 2026-11-18 the grammars agreed with `luac -p` of Lua 5.1.5 on all 24 files of the official Lua 5.1 test suite, and on 7,904 of 7,908 Lua files of this and nearby repositories; the official compiler accepted no file that `lua51` rejects (with a first `#` line blanked) or that `lua51_shebang` rejects, and the other four files were the plain text above. `tools/conformance.lua` repeats the comparison on any list of files:
 
 ```sh
 find . -name '*.lua' | lua tools/conformance.lua --strip-shebang lexogram:lua51 /path/to/luac5.1
 find . -name '*.lua' | lua tools/conformance.lua lexogram:lua51_shebang /path/to/luac5.1
 ```
 
+The numbers and the escapes were also compared with `load` of Lua 5.1.5 on 2026-11-18, in parentheses so that the pieces of a split token cannot form valid syntax (`x = (...)`): all 444,604 numeral-like sources (up to five characters of digits, `a`, `e`, `f`, `x`, `p`, `.`, `+`, `-`, `_` and `g`) and all 137,570 escape-like strings (a backslash and up to four characters) agreed.
+
 ## Performance
 
-The speed of `lua51` on each runtime. `lua bench/tokenize.lua lexogram:lua51` and `lua bench/parse.lua lexogram:lua51` measure the grammar on the library sources, each wrapped in `do ... end` and repeated to 2.13 MB (best of 5 in one process, CPU time, 2026-11-17, local machine). Compile is the time of `lexogram.compile`; loading `lexogram:lua51` for the first time also checks the grammar (see `lexogram.grammar`), which takes about as long. On LuaJIT the speed differs between processes, as the traces that the compiler chooses differ; the range of eight processes is shown.
+The speed of `lua51` on each runtime. `lua bench/tokenize.lua lexogram:lua51` and `lua bench/parse.lua lexogram:lua51` measure the grammar on the library sources, each wrapped in `do ... end` and repeated to 2.24 MB (best of 5 in one process, CPU time, 2026-11-18, local machine). Compile is the time of `lexogram.compile`; loading `lexogram:lua51` for the first time also checks the grammar (see `lexogram.grammar`), which takes about as long. On LuaJIT the speed differs between processes, as the traces that the compiler chooses differ; the range of five processes is shown.
 
 | Runtime | Compile | Tokenize | Parse to the event array |
 |---|---|---|---|
-| Lua 5.1 | 0.18 s | 5.8 MB/s (1.2 M tokens/s) | 2.5 MB/s (1.1 M events/s) |
-| Lua 5.4 | 0.14 s | 7.9 MB/s | 3.5 MB/s |
-| Lua 5.5 | 0.15 s | 7.6 MB/s | 3.5 MB/s |
-| LuaJIT 2.1 | 0.10 s | 77 to 101 MB/s | 21 to 32 MB/s |
+| Lua 5.1 | 0.25 s | 5.0 MB/s (1.1 M tokens/s) | 2.3 MB/s (1.0 M events/s) |
+| Lua 5.4 | 0.19 s | 7.3 MB/s | 3.3 MB/s |
+| Lua 5.5 | 0.20 s | 7.2 MB/s | 3.3 MB/s |
+| LuaJIT 2.1 | 0.10 s | 105 to 110 MB/s | 22 to 31 MB/s |

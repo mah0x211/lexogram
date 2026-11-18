@@ -59,7 +59,6 @@ local ROOT_ORDER = {
     'skip',
     'leading',
     'rules',
-    'greedy',
     'recover',
 }
 local DELIMITED_ORDER = {

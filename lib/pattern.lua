@@ -24,8 +24,12 @@
 -- { pos, code, message } tables and argument errors are raised. The 'tokens'
 -- context allows character classes, builtin classes and fragment references;
 -- the 'rules' context allows references to any non-reserved name and ordered
--- choice instead. In the 'tokens' context, the names of the captures of a
--- delimited token table may also be given; they resolve to capture nodes.
+-- choice and possessive repetitions (?+, *+, ++: the node of the repetition
+-- has possessive = true) instead. The 'tokens' context allows lookaheads:
+-- (?= p ) and (?! p ) give { type = 'lookahead', negative, item }, which
+-- consume nothing and cannot be repeated. In the 'tokens' context, the names of the
+-- captures of a delimited token table may also be given; they resolve to
+-- capture nodes.
 -- Groups may be nested at most MAX_NESTING levels deep (nesting_too_deep).
 local type = type
 local error = error
@@ -47,6 +51,7 @@ local decode = utf8.decode
 
 -- Byte values of the characters the scanner looks at.
 local TAB = 9
+local BANG = 33
 local LF = 10
 local CR = 13
 local SPACE = 32
@@ -57,6 +62,7 @@ local STAR = 42
 local PLUS = 43
 local HYPHEN = 45
 local SLASH = 47
+local EQUALS = 61
 local QUESTION = 63
 local LBRACKET = 91
 local BACKSLASH = 92
@@ -694,6 +700,31 @@ local function reject_class(_, pos)
          'character class is not allowed in this context')
 end
 
+--- reject_possessive rejects a possessive repetition in a context without
+--- them.
+--- @param _ table parser state
+--- @param pos integer position of the "+" after the postfix operator
+local function reject_possessive(_, pos)
+    fail(pos, 'possessive_not_allowed',
+         'possessive repetition (?+, *+, ++) is not allowed in this context')
+end
+
+--- accept_possessive accepts a possessive repetition.
+local function accept_possessive()
+end
+
+--- reject_lookahead rejects a lookahead in a context without them.
+--- @param _ table parser state
+--- @param pos integer position of the "("
+local function reject_lookahead(_, pos)
+    fail(pos, 'lookahead_not_allowed',
+         'lookahead (?= or (?! is not allowed in this context')
+end
+
+--- accept_lookahead accepts a lookahead.
+local function accept_lookahead()
+end
+
 --- reject_ordered_choice rejects "/" in a context without ordered choice.
 --- @param _ table parser state
 --- @param pos integer
@@ -710,17 +741,22 @@ local function accept_ordered_choice(p, pos)
 end
 
 -- Context dependent behavior. Each context defines how names resolve, how a
--- class ("[") is handled and how "/" is handled.
+-- class ("[") is handled, how "/" is handled and whether a possessive
+-- repetition and a lookahead are allowed.
 local CONTEXTS = {
     tokens = {
         resolve_name = resolve_tokens_name,
         scan_class = scan_class,
         on_slash = reject_ordered_choice,
+        on_possessive = reject_possessive,
+        on_lookahead = accept_lookahead,
     },
     rules = {
         resolve_name = resolve_rules_name,
         scan_class = reject_class,
         on_slash = accept_ordered_choice,
+        on_possessive = accept_possessive,
+        on_lookahead = reject_lookahead,
     },
 }
 
@@ -795,7 +831,9 @@ local function missing_operand(p)
     fail(p.tpos, 'missing_operand', 'operand is missing')
 end
 
---- parse_group parses "(" choice ")" and returns the inner node.
+--- parse_group parses "(" choice ")" and returns the inner node, or a
+--- lookahead "(?=" choice ")" or "(?!" choice ")" ("(?" must be followed
+--- directly by "=" or "!").
 --- @param p table parser state
 --- @return table node
 local function parse_group(p)
@@ -807,6 +845,16 @@ local function parse_group(p)
              'groups are nested deeper than ' .. MAX_NESTING .. ' levels')
     end
     p.depth = p.depth + 1
+    -- p.pos is the position right after the "("
+    local negative
+    if byte(p.src, p.pos) == QUESTION then
+        local b = byte(p.src, p.pos + 1)
+        if b == EQUALS or b == BANG then
+            p.context.on_lookahead(p, open)
+            negative = b == BANG
+            p.pos = p.pos + 2
+        end
+    end
     advance(p)
     local node = parse_choice(p)
     if p.kind ~= ')' then
@@ -814,11 +862,20 @@ local function parse_group(p)
     end
     p.depth = p.depth - 1
     advance(p)
+    if negative ~= nil then
+        node = {
+            type = 'lookahead',
+            pos = open,
+            negative = negative,
+            item = node,
+        }
+    end
     return node
 end
 
---- parse_repeat parses a primary with an optional postfix operator. It
---- returns nil if the current token cannot start a primary.
+--- parse_repeat parses a primary with an optional postfix operator, which a
+--- "+" right after it makes possessive (?+, *+, ++). It returns nil if the
+--- current token cannot start a primary.
 --- @param p table parser state
 --- @return table? node
 local function parse_repeat(p)
@@ -833,12 +890,20 @@ local function parse_repeat(p)
     end
 
     local t = POSTFIX[p.kind]
-    if t then
+    if t and node.type == 'lookahead' then
+        fail(p.tpos, 'invalid_lookahead', 'a lookahead cannot be repeated')
+    elseif t then
         node = {
             type = t,
             pos = node.pos,
             item = node,
         }
+        -- p.pos is the position right after the postfix operator
+        if byte(p.src, p.pos) == PLUS then
+            p.context.on_possessive(p, p.pos)
+            node.possessive = true
+            p.pos = p.pos + 1
+        end
         advance(p)
         if POSTFIX[p.kind] then
             fail(p.tpos, 'repeated_postfix',

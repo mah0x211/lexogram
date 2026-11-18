@@ -9,12 +9,17 @@ local ROOT = '../'
 -- directory is only set while the tests run)
 local GRAMMAR, COMPILED, DIAGNOSTICS
 
+-- the file is loaded before the test runner moves to its directory, so the
+-- helper is found from the file itself
+local shared = dofile(debug.getinfo(1, 'S').source:match('^@(.-)[^/]*$') ..
+                          'grammars/shared.lua')
+
 local function load_grammar()
     if not COMPILED then
-        GRAMMAR = assert(lexogram.load(ROOT ..
-                                           'bench/grammars/lua51_lexical.lua'))
+        local pathname = ROOT .. 'bench/grammars/lua51_lexical.lua'
+        GRAMMAR = assert(shared.load(pathname))
         -- compile runs check and returns its diagnostics
-        COMPILED, DIAGNOSTICS = lexogram.compile(GRAMMAR)
+        COMPILED, DIAGNOSTICS = shared.compile(pathname)
     end
 end
 

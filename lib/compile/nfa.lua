@@ -24,6 +24,14 @@
 -- detection for fragment references, and a reference simulator. Every
 -- traversal of an AST or a graph is iterative with an explicit stack or
 -- queue.
+--
+-- A lookahead (?= p ) or (?! p ) becomes an epsilon edge guarded by a
+-- predicate (geps: { to, pred, value }): it can be taken at a position
+-- where the predicate, "the input from here starts with a string of p",
+-- has the value (true for (?=, false for (?!). The predicates are kept in
+-- a registry shared by the machines of a grammar (new_predicates), one per
+-- lookahead node; build_predicate builds the machine of p itself, which may
+-- register the predicates of nested lookaheads.
 local error = error
 local pairs = pairs
 local tostring = tostring
@@ -198,14 +206,43 @@ local TOO_LARGE = {}
 --- new_builder returns an empty machine under construction.
 --- @param max_states integer
 --- @return table
-local function new_builder(max_states)
+local function new_builder(max_states, preds)
     return {
         max_states = max_states,
+        preds = preds,
         count = 0,
         eps = {},
+        geps = {},
         edges = {},
         accept = {},
     }
+end
+
+--- new_predicates returns an empty registry of predicates: list (id ->
+--- { ast }) and index (lookahead body AST -> id).
+--- @return table
+local function new_predicates()
+    return {
+        list = {},
+        index = {},
+    }
+end
+
+--- intern returns the id of the predicate of the lookahead body ast,
+--- registering it on first use.
+--- @param preds table registry
+--- @param ast table
+--- @return integer
+local function intern(preds, ast)
+    local id = preds.index[ast]
+    if not id then
+        id = #preds.list + 1
+        preds.list[id] = {
+            ast = ast,
+        }
+        preds.index[ast] = id
+    end
+    return id
 end
 
 --- new_state allocates a state.
@@ -230,6 +267,26 @@ local function add_eps(m, from, to)
         m.eps[from] = list
     end
     list[#list + 1] = to
+end
+
+--- add_geps adds an epsilon edge guarded by the predicate pred having the
+--- value value.
+--- @param m table
+--- @param from integer
+--- @param to integer
+--- @param pred integer
+--- @param value boolean
+local function add_geps(m, from, to, pred, value)
+    local list = m.geps[from]
+    if not list then
+        list = {}
+        m.geps[from] = list
+    end
+    list[#list + 1] = {
+        to,
+        pred,
+        value,
+    }
 end
 
 --- add_edge adds a byte-range edge.
@@ -413,6 +470,11 @@ local function compile_task(m, task, stack, fragments)
             e,
             chain,
         }
+    elseif t == 'lookahead' then
+        if not m.preds then
+            error('lookahead without a predicate registry', 0)
+        end
+        add_geps(m, from, to, intern(m.preds, node.item), not node.negative)
     elseif t == 'ref' then
         local name = node.name
         local ast = fragments[name]
@@ -460,9 +522,10 @@ end
 --- @param defs table[]
 --- @param fragments table
 --- @param max_states integer
+--- @param preds table? predicate registry
 --- @return table machine
-local function build_machine(defs, fragments, max_states)
-    local m = new_builder(max_states)
+local function build_machine(defs, fragments, max_states, preds)
+    local m = new_builder(max_states, preds)
     m.start = new_state(m)
     for _, def in ipairs(defs) do
         local s, acc = new_state(m), new_state(m)
@@ -475,21 +538,25 @@ local function build_machine(defs, fragments, max_states)
         end
     end
     m.max_states = nil
+    m.preds = nil
     return m
 end
 
 --- build returns the combined automaton of defs. Each definition is either
 --- { id, ast } or { id, literal, ignore_case }. Fragments are expanded
---- inline and must be acyclic.
+--- inline and must be acyclic. The lookaheads of the ASTs are registered in
+--- preds, which is required when there are any.
 --- @param defs table[]
 --- @param fragments table fragment name -> AST
 --- @param limits table? { max_states } for tests only; max_states defaults
 --- to MAX_STATES
---- @return table? machine { start, count, eps, edges, accept }
+--- @param preds table? predicate registry (new_predicates)
+--- @return table? machine { start, count, eps, geps, edges, accept }
 --- @return table? err { code = 'automaton_too_large', message }
-local function build(defs, fragments, limits)
+local function build(defs, fragments, limits, preds)
     local max_states = get_limit(limits, 'max_states', MAX_STATES)
-    local ok, res = pcall(build_machine, defs, fragments or {}, max_states)
+    local ok, res = pcall(build_machine, defs, fragments or {}, max_states,
+                          preds)
     if ok then
         return res
     elseif res == TOO_LARGE then
@@ -502,55 +569,185 @@ local function build(defs, fragments, limits)
     error(res, 2)
 end
 
+--- build_predicate returns the machine of the body of the predicate id of
+--- preds, whose accepting state has id 1; the lookaheads nested in it are
+--- registered in preds.
+--- @param id integer
+--- @param preds table
+--- @param fragments table
+--- @param limits table?
+--- @return table? machine
+--- @return table? err
+local function build_predicate(id, preds, fragments, limits)
+    return build({
+        {
+            id = 1,
+            ast = preds.list[id].ast,
+        },
+    }, fragments, limits, preds)
+end
+
+--- reverse returns the machine of the strings s whose some suffix is the
+--- reverse of a string of machine (Σ* followed by the reverse): the edges
+--- are reversed (a guarded edge keeps its guard, since a guard is checked
+--- at a position between bytes, the same in both directions), a new start
+--- state loops on every byte and enters the old accepting states, and the
+--- old start state accepts with id 1. Read backward from the end of an
+--- input, it accepts at position i when the input from i starts with a
+--- string of machine.
+--- @param machine table
+--- @return table
+local function reverse(machine)
+    local m = {
+        count = machine.count + 1,
+        eps = {},
+        geps = {},
+        edges = {},
+        accept = {},
+    }
+    local function append(list_of, from, item)
+        local list = list_of[from]
+        if not list then
+            list = {}
+            list_of[from] = list
+        end
+        list[#list + 1] = item
+    end
+    for from = 1, machine.count do
+        for _, to in ipairs(machine.eps[from] or {}) do
+            append(m.eps, to, from)
+        end
+        for _, g in ipairs(machine.geps[from] or {}) do
+            append(m.geps, g[1], {
+                from,
+                g[2],
+                g[3],
+            })
+        end
+        for _, e in ipairs(machine.edges[from] or {}) do
+            append(m.edges, e[3], {
+                e[1],
+                e[2],
+                from,
+            })
+        end
+    end
+    local start = m.count
+    m.start = start
+    append(m.edges, start, {
+        0,
+        255,
+        start,
+    })
+    for s = 1, machine.count do
+        if machine.accept[s] ~= nil then
+            append(m.eps, start, s)
+        end
+    end
+    m.accept[machine.start] = 1
+    return m
+end
+
 -- simulation
 
---- closure adds the epsilon closure of the states in list to set and list.
+local holds
+
+--- closure adds the epsilon closure of the states in list to set and list,
+--- at position pos of the input s: a guarded edge is taken when its
+--- predicate has its value there (pred_machines: id -> machine).
 --- @param machine table
 --- @param list integer[]
 --- @param set table
-local function closure(machine, list, set)
+--- @param s string
+--- @param pos integer
+--- @param pred_machines table?
+local function closure(machine, list, set, s, pos, pred_machines)
     local stack = {}
     for i = 1, #list do
         stack[i] = list[i]
     end
+    local function push(t)
+        if not set[t] then
+            set[t] = true
+            list[#list + 1] = t
+            stack[#stack + 1] = t
+        end
+    end
     while #stack > 0 do
-        local s = stack[#stack]
+        local st = stack[#stack]
         stack[#stack] = nil
-        for _, t in ipairs(machine.eps[s] or {}) do
-            if not set[t] then
-                set[t] = true
-                list[#list + 1] = t
-                stack[#stack + 1] = t
+        for _, t in ipairs(machine.eps[st] or {}) do
+            push(t)
+        end
+        for _, g in ipairs(machine.geps[st] or {}) do
+            if holds(pred_machines, g[2], s, pos) == g[3] then
+                push(g[1])
             end
         end
     end
 end
 
---- accepts returns the sorted ids of the definitions whose accepting state
---- is reached after consuming the whole string s.
---- @param machine table
---- @param s string
---- @return integer[]
-local function accepts(machine, s)
+--- start_list returns the closure of the start state at position pos.
+local function start_list(machine, s, pos, pred_machines)
     local list = {}
     list[1] = machine.start
     closure(machine, list, {
         [machine.start] = true,
-    })
-    for i = 1, #s do
-        local b = byte(s, i)
-        local next_list, next_set = {}, {}
-        for _, state in ipairs(list) do
-            for _, edge in ipairs(machine.edges[state] or {}) do
-                local to = edge[3]
-                if b >= edge[1] and b <= edge[2] and not next_set[to] then
-                    next_set[to] = true
-                    next_list[#next_list + 1] = to
-                end
+    }, s, pos, pred_machines)
+    return list
+end
+
+--- step returns the closure of the states reached from list by the byte at
+--- position pos of s.
+local function step(machine, list, s, pos, pred_machines)
+    local b = byte(s, pos)
+    local next_list, next_set = {}, {}
+    for _, state in ipairs(list) do
+        for _, edge in ipairs(machine.edges[state] or {}) do
+            local to = edge[3]
+            if b >= edge[1] and b <= edge[2] and not next_set[to] then
+                next_set[to] = true
+                next_list[#next_list + 1] = to
             end
         end
-        closure(machine, next_list, next_set)
-        list = next_list
+    end
+    closure(machine, next_list, next_set, s, pos + 1, pred_machines)
+    return next_list
+end
+
+--- holds returns whether the input s from position pos starts with a string
+--- of the predicate id (whose machine is pred_machines[id]).
+function holds(pred_machines, id, s, pos)
+    local machine = pred_machines and pred_machines[id]
+    if not machine then
+        error('no machine for predicate ' .. tostring(id), 0)
+    end
+    local list = start_list(machine, s, pos, pred_machines)
+    for i = pos, #s + 1 do
+        for _, state in ipairs(list) do
+            if machine.accept[state] then
+                return true
+            end
+        end
+        if i > #s or #list == 0 then
+            return false
+        end
+        list = step(machine, list, s, i, pred_machines)
+    end
+end
+
+--- accepts returns the sorted ids of the definitions whose accepting state
+--- is reached after consuming the whole string s, where s is the whole
+--- input (a lookahead sees the end of input after s). pred_machines maps
+--- each predicate id to its machine, for machines with lookaheads.
+--- @param machine table
+--- @param s string
+--- @param pred_machines table?
+--- @return integer[]
+local function accepts(machine, s, pred_machines)
+    local list = start_list(machine, s, 1, pred_machines)
+    for i = 1, #s do
+        list = step(machine, list, s, i, pred_machines)
     end
 
     local ids, seen = {}, {}
@@ -568,6 +765,10 @@ end
 return {
     MAX_STATES = MAX_STATES,
     find_cycles = find_cycles,
+    new_predicates = new_predicates,
     build = build,
+    build_predicate = build_predicate,
+    reverse = reverse,
     accepts = accepts,
+    holds = holds,
 }

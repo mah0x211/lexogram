@@ -767,7 +767,7 @@ function testcase.parse_drops_events_of_a_longer_failed_alternative()
     })
 end
 
-function testcase.parse_decides_with_two_tokens_and_greedy_rules()
+function testcase.parse_decides_with_two_tokens_and_possessive_repetitions()
     local compiled = compiled_of({
         symbols = {
             '{',
@@ -780,12 +780,9 @@ function testcase.parse_decides_with_two_tokens_and_greedy_rules()
             'then',
             'else',
         },
-        greedy = {
-            'stat',
-        },
         rules = {
             chunk = 'stat*',
-            stat = '"if" name "then" stat ("else" stat)? | table',
+            stat = '"if" name "then" stat ("else" stat)?+ | table',
             table = '"{" (field ("," field)*)? "}"',
             field = 'name "=" name | name',
         },

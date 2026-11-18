@@ -9,29 +9,16 @@ local events = require('lexogram.events')
 local ROOT = '../../'
 local COMPILED
 
--- run fn with the coverage hook removed: compiling the full grammar and
--- parsing whole files take far too long under luacov's line hook, and the
--- library lines they run are covered by the other tests
-local function without_hook(fn, ...)
-    local hook, mask, count = debug.gethook()
-    debug.sethook()
-    local res = {
-        pcall(fn, ...),
-    }
-    if hook then
-        debug.sethook(hook, mask, count)
-    end
-    if not res[1] then
-        error(res[2], 0)
-    end
-    return res[2], res[3]
-end
+-- the file is loaded before the test runner moves to its directory, so the
+-- helper is found next to the file itself
+local shared = dofile(debug.getinfo(1, 'S').source:match('^@(.-)[^/]*$') ..
+                          'shared.lua')
+local without_hook = shared.without_hook
 
 local function compiled()
     if not COMPILED then
-        local grammar = assert(lexogram.load('lexogram:lua51'))
         local diagnostics
-        COMPILED, diagnostics = without_hook(lexogram.compile, grammar)
+        COMPILED, diagnostics = shared.compile('lexogram:lua51')
         assert.equal(diagnostics, {})
     end
     return COMPILED
@@ -338,7 +325,8 @@ end
 
 function testcase.a_parenthesis_after_an_expression_is_a_call()
     -- as in the official parser, the "(" on the next line continues the
-    -- expression as call arguments (greedy, declared in the grammar)
+    -- expression as call arguments (the possessive _suffix*+ of
+    -- suffixedexp)
     local b = block('a = b\n(f)()')
 
     assert.equal(rule_names(b), {
@@ -385,6 +373,8 @@ function testcase.library_sources_parse()
         local f = assert(io.open(ROOT .. path, 'rb'))
         local source = f:read('*a')
         f:close()
+        -- parsing whole files takes far too long under luacov's line hook,
+        -- and the library lines it runs are covered by the other tests
         without_hook(parse, source)
     end
 end

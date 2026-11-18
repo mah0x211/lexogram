@@ -34,7 +34,7 @@
 --        number of fields directly under X does not change)
 --
 -- The target X must exist in the base; the top-level table fields (tokens,
--- rules, symbols, keywords, skip, leading, greedy and recover) exist as
+-- rules, symbols, keywords, skip, leading and recover) exist as
 -- empty tables when the base has none. An item or field to add must not
 -- exist, and one to remove or replace must. In each table, removals are
 -- applied first, then replacements and entered tables, then additions.
@@ -67,7 +67,6 @@ local TABLE_FIELDS = {
     keywords = true,
     skip = true,
     leading = true,
-    greedy = true,
     recover = true,
 }
 local VALUE_FIELDS = {

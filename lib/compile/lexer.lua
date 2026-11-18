@@ -42,6 +42,7 @@ local quote = require('lexogram.text').quote
 local nfa = require('lexogram.compile.nfa')
 local dfa = require('lexogram.compile.dfa')
 local delimited = require('lexogram.compile.delimited')
+local lookahead = require('lexogram.compile.lookahead')
 local get_limit = require('lexogram.compile.limits').get
 
 -- Byte value of "_", which starts a fragment name.
@@ -81,6 +82,8 @@ local function label(def)
     local segs = def.segments
     if segs[1] == 'tokens' then
         return 'tokens.' .. segs[2]
+    elseif segs[2] == 'contextual' then
+        return 'keywords.contextual[' .. segs[3] .. ']'
     end
     return segs[1] .. '[' .. segs[2] .. ']'
 end
@@ -202,6 +205,29 @@ local function collect_definitions(grammar)
                 i = i + 1
                 v = rawget(tbl, i)
             end
+            -- contextual keywords are not in the automaton: a contextual
+            -- keyword is read as the pattern token it matches (base)
+            local contextual = field == 'keywords' and rawget(tbl, 'contextual')
+            if contextual then
+                i = 1
+                v = rawget(contextual, i)
+                while v ~= nil do
+                    local id = #defs + 1
+                    defs[id] = {
+                        id = id,
+                        kind = 'contextual',
+                        name = v,
+                        ignore_case = ignore_case,
+                        segments = {
+                            'keywords',
+                            'contextual',
+                            i,
+                        },
+                    }
+                    i = i + 1
+                    v = rawget(contextual, i)
+                end
+            end
         end
     end
     for _, name in ipairs(tables) do
@@ -232,24 +258,63 @@ local function check_recursion(diagnostics, fragments)
 end
 
 --- check_conflicts adds empty_match, token_conflict and literal_conflict
---- errors.
+--- errors. For an automaton with lookaheads (dispatch states), only the
+--- states that an input can reach with consistent predicates are checked
+--- (see lexogram.compile.lookahead.reachable); it returns an
+--- automaton_too_large error when that analysis exceeds its limit.
 --- @param diagnostics table[]
 --- @param defs table[]
 --- @param d table
-local function check_conflicts(diagnostics, defs, d)
-    for _, id in ipairs(d.accept_sets[1]) do
-        local def = defs[id]
-        if def.kind == 'token' then
-            add_error(diagnostics, 'empty_match', def.segments,
-                      label(def) .. ' matches the empty string')
+--- @param predicates table[]? result of lexogram.compile.lookahead.build
+--- @param max integer largest number of configurations of the analysis
+--- @return table? err
+local function check_conflicts(diagnostics, defs, d, predicates, max)
+    local example, states
+    if d.dispatch then
+        local found, err = lookahead.reachable(d, predicates, max)
+        if not found then
+            return err
+        end
+        example = function(s)
+            return found[s]
+        end
+        states = {}
+        for s in next, found do
+            states[#states + 1] = s
+        end
+        sort(states, function(a, b)
+            if #found[a] ~= #found[b] then
+                return #found[a] < #found[b]
+            end
+            return a < b
+        end)
+    else
+        example = delimited.examples(d)
+        states = {}
+        for s = 1, d.nstates do
+            states[s] = s
         end
     end
 
-    local example = delimited.examples(d)
+    local empty = {}
+    for _, s in ipairs(states) do
+        if example(s) == '' then
+            for _, id in ipairs(d.accept_sets[s]) do
+                local def = defs[id]
+                if def.kind == 'token' and not empty[id] then
+                    empty[id] = true
+                    add_error(diagnostics, 'empty_match', def.segments,
+                              label(def) .. ' matches the empty string')
+                end
+            end
+        end
+    end
+
     local seen = {}
-    -- state 1 would give an empty example; empty_match covers it
-    for s = 2, d.nstates do
-        local ids = d.accept_sets[s]
+    -- a state reached without input gives an empty example; empty_match
+    -- covers it
+    for _, s in ipairs(states) do
+        local ids = example(s) == '' and {} or d.accept_sets[s]
         for i = 1, #ids do
             local a = defs[ids[i]]
             for j = i + 1, #ids do
@@ -265,6 +330,98 @@ local function check_conflicts(diagnostics, defs, d)
                               label(b) .. ' can match the same string as ' ..
                                   label(a) .. ', e.g. ' .. quote(example(s)))
                 end
+            end
+        end
+    end
+end
+
+--- winners returns the ids that win in the states of d where the whole
+--- string text can end, taking every target of a dispatch state (whatever
+--- its predicates give); it may thus include ids that no context gives.
+--- @param d table
+--- @param text string
+--- @return table id -> true
+local function winners(d, text)
+    local nclasses, classes, trans = d.nclasses, d.classes, d.trans
+    local dispatch = d.dispatch or {}
+    local function expand(list)
+        local out, seen = {}, {}
+        for _, s in ipairs(list) do
+            local entry = dispatch[s]
+            for _, t in ipairs(entry and entry.targets or {
+                s,
+            }) do
+                if t ~= 0 and not seen[t] then
+                    seen[t] = true
+                    out[#out + 1] = t
+                end
+            end
+        end
+        return out
+    end
+    local list = expand({
+        1,
+    })
+    for i = 1, #text do
+        local c = classes[byte(text, i) + 1]
+        local nxt = {}
+        for _, s in ipairs(list) do
+            nxt[#nxt + 1] = trans[(s - 1) * nclasses + c]
+        end
+        list = expand(nxt)
+    end
+    local ids = {}
+    for _, s in ipairs(list) do
+        local id = d.accept[s]
+        if id > 0 then
+            ids[id] = true
+        end
+    end
+    return ids
+end
+
+--- resolve_contextual sets the base of each contextual keyword definition:
+--- the pattern token that the tokenizer reads its text as (in some context
+--- of its lookaheads), which must be exactly one and not be listed in skip
+--- (it never reaches the parser); otherwise it adds invalid_contextual.
+--- @param diagnostics table[]
+--- @param defs table[]
+--- @param d table automaton of the pattern tokens and literals
+--- @param skip any the skip field of the grammar
+local function resolve_contextual(diagnostics, defs, d, skip)
+    local skipped
+    for _, def in ipairs(defs) do
+        if def.kind == 'contextual' then
+            if not skipped then
+                -- raw reads: the grammar may have metatables
+                skipped = {}
+                local i = 1
+                local name = type(skip) == 'table' and rawget(skip, i)
+                while name do
+                    skipped[name] = true
+                    i = i + 1
+                    name = rawget(skip, i)
+                end
+            end
+            local names, base = {}, nil
+            for id in next, winners(d, def.name) do
+                names[#names + 1] = label(defs[id])
+                base = defs[id].kind == 'token' and id or nil
+            end
+            sort(names, byte_less)
+            if base and #names == 1 and skipped[defs[base].name] then
+                add_error(diagnostics, 'invalid_contextual', def.segments,
+                          label(def) .. ' is read as ' .. names[1] ..
+                              ', which is listed in skip and never reaches' ..
+                              ' the parser')
+            elseif #names == 1 and base then
+                def.base = base
+            else
+                add_error(diagnostics, 'invalid_contextual', def.segments,
+                          label(def) .. ' must be read as exactly one' ..
+                              ' pattern token, which it stands for; it is' ..
+                              ' read as ' ..
+                              (#names == 0 and 'none' or concat(names, ' or ')))
             end
         end
     end
@@ -389,9 +546,10 @@ end
 --- largest number of states of every non-deterministic automaton (passed
 --- to nfa.build) and of every deterministic automaton (passed to dfa.build)
 --- built for the grammar; each defaults to the builder's MAX_STATES
---- @return table? result { defs, dfa, leading, delimited }, nil when there
---- is an error; leading is the automaton of the leading tokens (nil without
---- them)
+--- @return table? result { defs, dfa, leading, delimited, predicates }, nil
+--- when there is an error; leading is the automaton of the leading tokens
+--- (nil without them), predicates the automata of the predicates of the
+--- lookaheads (see lexogram.compile.lookahead; nil without them)
 --- @return table[] diagnostics { severity, code, segments, pos, message }
 local function build(grammar, limits)
     -- read here, so that an invalid limit raises at the caller of build
@@ -410,7 +568,8 @@ local function build(grammar, limits)
         return nil, diagnostics
     end
 
-    local machine, err = nfa.build(nfa_defs, fragments, limits.nfa)
+    local preds = nfa.new_predicates()
+    local machine, err = nfa.build(nfa_defs, fragments, limits.nfa, preds)
     if not machine then
         return too_large(diagnostics, err)
     end
@@ -422,7 +581,7 @@ local function build(grammar, limits)
 
     local leading
     if #leading_defs > 0 then
-        machine, err = nfa.build(leading_defs, fragments, limits.nfa)
+        machine, err = nfa.build(leading_defs, fragments, limits.nfa, preds)
         if not machine then
             return too_large(diagnostics, err)
         end
@@ -439,11 +598,28 @@ local function build(grammar, limits)
         return too_large(diagnostics, err)
     end
 
-    check_conflicts(diagnostics, defs, d)
+    resolve_contextual(diagnostics, defs, d, rawget(grammar, 'skip'))
+
+    local predicates
+    if #preds.list > 0 then
+        predicates, err = lookahead.build(preds, fragments, limits)
+        if not predicates then
+            return too_large(diagnostics, err)
+        end
+    end
+
+    local max = limits.dfa.max_states
+    err = check_conflicts(diagnostics, defs, d, predicates, max)
+    if err then
+        return too_large(diagnostics, err)
+    end
     -- leading tokens are checked among themselves only: at the start of
     -- input they win over every other token
     if leading then
-        check_conflicts(diagnostics, defs, leading)
+        err = check_conflicts(diagnostics, defs, leading, predicates, max)
+        if err then
+            return too_large(diagnostics, err)
+        end
     end
     if #diagnostics > 0 then
         return nil, diagnostics
@@ -454,6 +630,7 @@ local function build(grammar, limits)
         dfa = d,
         leading = leading,
         delimited = compiled,
+        predicates = predicates,
     }, diagnostics
 end
 

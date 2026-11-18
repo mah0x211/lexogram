@@ -7,26 +7,13 @@ local NAME = 'lexogram:lua54_shebang'
 local BOM = '\239\187\191'
 local COMPILED, BASE
 
--- run fn with the coverage hook removed: compiling the full grammar takes
--- far too long under luacov's line hook
-local function without_hook(fn, ...)
-    local hook, mask, count = debug.gethook()
-    debug.sethook()
-    local res = {
-        pcall(fn, ...),
-    }
-    if hook then
-        debug.sethook(hook, mask, count)
-    end
-    if not res[1] then
-        error(res[2], 0)
-    end
-    return res[2], res[3]
-end
+-- the file is loaded before the test runner moves to its directory, so the
+-- helper is found next to the file itself
+local shared = dofile(debug.getinfo(1, 'S').source:match('^@(.-)[^/]*$') ..
+                          'shared.lua')
 
 local function compiled_of(name)
-    local grammar = assert(lexogram.load(name))
-    local compiled, diagnostics = without_hook(lexogram.compile, grammar)
+    local compiled, diagnostics = shared.compile(name)
     assert.equal(diagnostics, {})
     return compiled
 end
@@ -54,8 +41,8 @@ local function tokens(result)
 end
 
 function testcase.grammar_is_lua54_with_a_leading_shebang()
-    local grammar = assert(lexogram.load(NAME))
-    local lua54 = assert(lexogram.load('lexogram:lua54'))
+    local grammar = assert(shared.load(NAME))
+    local lua54 = assert(shared.load('lexogram:lua54'))
 
     assert.equal(grammar.name, 'lua54_shebang')
     assert.equal(grammar.version, '1.0.0')
@@ -108,5 +95,5 @@ function testcase.merged_source_loads_back_into_the_grammar()
     local src = assert(lexogram.merge(NAME))
     local fn = assert((loadstring or load)(src))
 
-    assert.equal(fn(), lexogram.load(NAME))
+    assert.equal(fn(), shared.load(NAME))
 end

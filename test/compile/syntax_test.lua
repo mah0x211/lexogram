@@ -217,8 +217,9 @@ function testcase.analyze_accepts_overlapping_ordered_choices()
     })
 end
 
--- the dangling else: stat = "if" expr "then" stat ("else" stat)? | other
-local function dangling_else(greedy)
+-- the dangling else: stat = "if" expr "then" stat ("else" stat)? | other,
+-- with the optional else possessive (?+) if possessive is true
+local function dangling_else(possessive, expr)
     return grammar({
         start = 'stat',
         symbols = {
@@ -230,15 +231,15 @@ local function dangling_else(greedy)
             'else',
         },
         rules = {
-            stat = '"if" expr "then" stat ("else" stat)? | ";"',
-            expr = 'name',
+            stat = '"if" expr "then" stat ("else" stat)?' ..
+                (possessive and '+' or '') .. ' | ";"',
+            expr = expr or 'name',
         },
-        greedy = greedy,
     })
 end
 
-function testcase.analyze_words_repetition_greedy_spots()
-    local _, diagnostics = analyze(grammar({
+function testcase.analyze_reports_ambiguous_repetitions()
+    local result, diagnostics = analyze(grammar({
         symbols = {
             'x',
             'y',
@@ -249,28 +250,36 @@ function testcase.analyze_words_repetition_greedy_spots()
         },
     }))
 
+    assert.is_nil(result)
     assert.equal(diagnostics, {
-        at('warning', 'undeclared_greedy', {
+        at('error', 'ambiguous_repetition', {
             'rules',
             's',
         }, 2, 'rules.s: the repetition can both continue and end with' ..
-               ' "x" "y"; rewrite the rule or add s to greedy to always' ..
-               ' take the element'),
+               ' "x" "y"; rewrite the rule, or write *+ to always take the' ..
+               ' element'),
     })
 end
 
-function testcase.analyze_warns_about_undeclared_greedy_spots()
-    local result, diagnostics, ids = analyze(dangling_else())
-
+function testcase.analyze_accepts_possessive_ambiguous_repetitions()
+    -- an ambiguous optional element is an error
+    local result, diagnostics = analyze(dangling_else(false))
+    assert.is_nil(result)
     assert.equal(diagnostics, {
-        at('warning', 'undeclared_greedy', {
+        at('error', 'ambiguous_repetition', {
             'rules',
             'stat',
         }, 24, 'rules.stat: the optional element can both be taken and' ..
-               ' skipped with "else" ";"; rewrite the rule or add stat to' ..
-               ' greedy to always take the element'),
+               ' skipped with "else" ";"; rewrite the rule, or write ?+ to' ..
+               ' always take the element'),
     })
+
+    -- written possessive, it is taken whenever "else" comes
+    local ids
+    result, diagnostics, ids = analyze(dangling_else(true))
+    assert.equal(diagnostics, {})
     local opt = result.rules.stat.items[1].items[5]
+    assert.is_true(opt.possessive)
     local decision = result.decisions[opt]
     assert.equal(decision.enter, {
         [ids['else']] = true,
@@ -282,28 +291,25 @@ function testcase.analyze_warns_about_undeclared_greedy_spots()
         },
     })
     assert.is_number(decision.greedy)
-
-    -- declared as greedy
-    result, diagnostics = analyze(dangling_else({
-        'stat',
-    }))
-    assert.is_table(result)
-    assert.equal(diagnostics, {})
 end
 
-function testcase.analyze_warns_about_unneeded_greedy()
-    local result, diagnostics = analyze(dangling_else({
-        'stat',
-        'expr',
-    }))
+function testcase.analyze_warns_about_unneeded_possessive_repetitions()
+    -- name++ is followed by "then" only, so it is never ambiguous
+    local result, diagnostics = analyze(dangling_else(true, 'name++'))
 
     assert.is_table(result)
     assert.equal(diagnostics, {
-        at('warning', 'unneeded_greedy', {
-            'greedy',
-            2,
-        }, nil, 'greedy[2] "expr" has no greedy repetition'),
+        at('warning', 'unneeded_possessive', {
+            'rules',
+            'expr',
+        }, 1, 'rules.expr: ++ is not needed: the repetition is never' ..
+               ' ambiguous'),
     })
+    -- warnings are reported only without errors
+    result, diagnostics = analyze(dangling_else(false, 'name++'))
+    assert.is_nil(result)
+    assert.equal(#diagnostics, 1)
+    assert.equal(diagnostics[1].code, 'ambiguous_repetition')
 end
 
 function testcase.analyze_reports_nullable_repetitions()
@@ -313,8 +319,10 @@ function testcase.analyze_reports_nullable_repetitions()
             'y',
         },
         rules = {
-            s = '("x"?)* "y" a+',
-            a = '"x"?',
+            -- the possessive ?+ keeps the optional elements from being
+            -- reported as ambiguous
+            s = '("x"?+)* "y" a+',
+            a = '"x"?+',
         },
     }))
 
@@ -327,7 +335,7 @@ function testcase.analyze_reports_nullable_repetitions()
         at('error', 'nullable_repetition', {
             'rules',
             's',
-        }, 13, 'rules.s: the repeated element can match the empty string'),
+        }, 14, 'rules.s: the repeated element can match the empty string'),
     })
 end
 

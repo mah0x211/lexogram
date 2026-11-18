@@ -44,10 +44,13 @@
 --
 -- tokens
 --
--- One fragment changes; the tokens are those of lua52.
+-- One fragment changes and one is added; the tokens are those of lua52.
 --
---   _escape    the escapes of lua52 and \u{XXX}: the UTF-8 encoding of a
---              code point written as one or more hexadecimal digits
+--   _escape       the escapes of lua52 and \u{XXX}: the UTF-8 encoding of
+--                 a code point written as hexadecimal digits, "0"* and
+--                 _code_point
+--   _code_point   the digits of a value up to 10FFFF, after the leading
+--                 zeros (Lua 5.3 checks the value: \u{110000} is an error)
 --
 -- A numeral is written as in Lua 5.2. Whether it denotes an integer or a
 -- float depends on its text and value, not on the range of the token.
@@ -94,8 +97,7 @@
 --
 -- The grammar accepts every source that Lua 5.3 accepts, and some that it
 -- rejects: those of lua52 (the checks that are not syntax, including those
--- of goto, and malformed numbers), and a \u escape above 10FFFF, whose
--- value Lua 5.3 checks ("UTF-8 value too large").
+-- of goto).
 return assert(require('lexogram.grammar')({
     extends = 'lexogram:lua52',
     lexogram = '2026.11.15.1',
@@ -109,6 +111,14 @@ return assert(require('lexogram.grammar')({
         '<<',
         '>>',
     },
+    ['++tokens'] = {
+        -- the hexadecimal digits of a code point up to 10FFFF, after the
+        -- leading zeros
+        _code_point = [[
+            HEXDIGIT HEXDIGIT? HEXDIGIT? HEXDIGIT? HEXDIGIT?
+            | "10" HEXDIGIT HEXDIGIT HEXDIGIT HEXDIGIT
+        ]],
+    },
     tokens = {
         -- a line break is \r\n, \n\r, \n or \r, as the lexer reads it
         ['=_escape'] = [[
@@ -116,9 +126,9 @@ return assert(require('lexogram.grammar')({
                 [abfnrtv\\\"']
                 | "\r\n" | "\n\r" | "\n" | "\r"
                 | "x" HEXDIGIT HEXDIGIT
-                | DIGIT DIGIT? DIGIT?
+                | _decimal_escape
                 | "z" [ \t\r\n\x0B\x0C]*
-                | "u{" HEXDIGIT+ "}"
+                | "u{" "0"* _code_point "}"
             )
         ]],
     },

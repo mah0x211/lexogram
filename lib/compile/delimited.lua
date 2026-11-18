@@ -285,6 +285,81 @@ local function add_error(diagnostics, code, segments, pos, message)
     }
 end
 
+--- find_lookahead returns the first lookahead in ast, expanding the
+--- fragments and captures it refers to: the position of the lookahead in
+--- ast itself (or of the reference through which it is reached) and the
+--- name of that fragment or capture, or nil.
+--- @param ast table
+--- @param fragments table
+--- @param capdefs table capture name -> AST
+--- @return integer? pos
+--- @return string? through
+local function find_lookahead(ast, fragments, capdefs)
+    -- each item is { node, top-level position, name of the reference }
+    local stack = {
+        {
+            ast,
+        },
+    }
+    local seen = {}
+    while #stack > 0 do
+        local item = stack[#stack]
+        stack[#stack] = nil
+        local node = item[1]
+        if node.type == 'lookahead' then
+            return item[2] or node.pos, item[3]
+        elseif not seen[node] then
+            seen[node] = true
+            local kids = children(node, fragments, capdefs)
+            local ref = (node.type == 'ref' or node.type == 'capture') and
+                            node.name
+            for i = #kids, 1, -1 do
+                if item[2] then
+                    stack[#stack + 1] = {
+                        kids[i],
+                        item[2],
+                        item[3],
+                    }
+                elseif ref then
+                    stack[#stack + 1] = {
+                        kids[i],
+                        node.pos,
+                        ref,
+                    }
+                else
+                    stack[#stack + 1] = {
+                        kids[i],
+                    }
+                end
+            end
+        end
+    end
+    return nil
+end
+
+--- reject_lookahead reports a lookahead in ast, the pattern of the field at
+--- segments named label, and returns true if there is one: a delimited
+--- token table is matched by its open, then a search for its close, which
+--- do not evaluate lookaheads.
+--- @param diagnostics table[]
+--- @param ast table
+--- @param fragments table
+--- @param capdefs table
+--- @param segments any[]
+--- @param label string
+--- @return boolean
+local function reject_lookahead(diagnostics, ast, fragments, capdefs, segments,
+                                label)
+    local pos, through = find_lookahead(ast, fragments, capdefs)
+    if not pos then
+        return false
+    end
+    add_error(diagnostics, 'lookahead_not_allowed', segments, pos,
+              label .. ': a lookahead is not allowed in a delimited token' ..
+                  ' table' .. (through and ' (through ' .. through .. ')' or ''))
+    return true
+end
+
 --- capture_nodes returns the capture nodes of ast in source order.
 --- @param ast table
 --- @return table[]
@@ -597,6 +672,14 @@ local function analyze(name, tbl, fragments, diagnostics, limits)
     local before = #diagnostics
     local a = new_analysis(name, tbl, fragments, diagnostics)
     a.limits = limits
+    local open_has = reject_lookahead(diagnostics, a.open, fragments, a.capdefs,
+                                      a.open_segments, a.label .. '.open')
+    local close_has = reject_lookahead(diagnostics, a.close, fragments,
+                                       a.capdefs, a.close_segments,
+                                       a.label .. '.close')
+    if open_has or close_has then
+        return nil
+    end
     local index = check_open_captures(a)
     local prefix
     if index then
@@ -654,6 +737,9 @@ local function analyze_prefixed(name, tbl, by_name, fragments, diagnostics)
     local label = 'tokens.' .. name .. '.prefix'
     local segments = triple('tokens', name, 'prefix')
     local prefix = parse(rawget(tbl, 'prefix'), 'tokens')
+    if reject_lookahead(diagnostics, prefix, fragments, {}, segments, label) then
+        return {}
+    end
     local min, max = lengths(prefix, fragments, {})
     if min == 0 then
         add_error(diagnostics, 'empty_match', segments, nil,

@@ -26,8 +26,10 @@
 -- check(grammar) returns the diagnostics of a grammar table (see
 -- lexogram.check), compile(grammar) compiles it into plain data (see
 -- lexogram.compile), tokenize(compiled, source, pos, mode) finds the
--- token at a position (see lexogram.tokenizer) and parse(compiled, source)
--- returns the event array of a source (see lexogram.analyzer).
+-- token at a position (see lexogram.tokenizer; source is a string or an
+-- input of input(source), which keeps the values of the lookaheads for
+-- repeated calls) and parse(compiled, source) returns the event array of a
+-- source (see lexogram.analyzer).
 -- merge(pathname) returns the Lua source of the grammar file merged with
 -- the grammars it extends, which extends no grammar (see lexogram.source).
 local type = type
@@ -77,5 +79,6 @@ return {
     check = check.check,
     compile = compile.compile,
     tokenize = tokenizer.tokenize,
+    input = tokenizer.input,
     parse = analyzer.parse,
 }
