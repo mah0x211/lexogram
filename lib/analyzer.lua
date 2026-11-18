@@ -51,9 +51,11 @@
 -- token; rewinding drops the events after it, empties the lookahead and
 -- tokenizes again from the saved position.
 --
--- Error recovery is not implemented yet: the first syntax error, or a
+-- Error recovery is not implemented yet: the first syntax error, a
 -- delimited token that is unterminated or has a nested open forbidden by
--- its nest setting, stops the analysis with nil and an error
+-- its nest setting, or a pattern token whose text fails a pattern after
+-- the first of the array that defines it, stops the analysis with nil and
+-- an error
 -- { code, pos, line, column, expected, actual, message } (column in bytes,
 -- see lexogram.events).
 local type = type
@@ -277,6 +279,14 @@ local function parse(compiled, source)
                 actual = k,
                 expected = {},
                 message = 'unterminated ' .. kind_label(kinds, k),
+            }
+        elseif problem == 'invalid' then
+            failure = {
+                code = 'invalid_token',
+                pos = raw_pos,
+                actual = k,
+                expected = {},
+                message = 'invalid ' .. kind_label(kinds, k),
             }
         elseif problem then
             failure = {

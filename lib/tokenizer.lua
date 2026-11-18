@@ -263,6 +263,62 @@ local function longest(a, source, pos, len)
     return kind, stop
 end
 
+--- satisfies returns true if the automaton a of a check matches the whole
+--- text of source from first to last. Its predicates see only that text:
+--- they are evaluated forward with last as the end of the input.
+--- @param a table automaton
+--- @param predicates table[]?
+--- @param source string
+--- @param first integer
+--- @param last integer
+--- @return boolean
+local function satisfies(a, predicates, source, first, last)
+    local nclasses, classes, trans, accept, dispatch = a.nclasses, a.classes,
+                                                       a.trans, a.accept,
+                                                       a.dispatch
+    local s = 1
+    local i = first
+    while true do
+        if accept[s] < 0 then
+            local e = dispatch[s]
+            s = e.targets[valuation(predicates, e.preds, source, i, last) + 1]
+            if s == 0 then
+                return false
+            end
+        end
+        if i > last then
+            return accept[s] ~= 0
+        end
+        s = trans[(s - 1) * nclasses + classes[byte(source, i) + 1]]
+        if s == 0 then
+            return false
+        end
+        i = i + 1
+    end
+end
+
+--- check returns kind and stop, with 'invalid' and the index of the first
+--- check of list that the text from pos to stop - 1 fails when there is
+--- one (the index of its pattern in the array that defines the token).
+--- @param list table[] the automata of the checks of kind
+--- @param predicates table[]?
+--- @param kind integer
+--- @param source string
+--- @param pos integer
+--- @param stop integer
+--- @return integer kind
+--- @return integer stop
+--- @return string? problem 'invalid'
+--- @return integer? index
+local function check(list, predicates, kind, source, pos, stop)
+    for i = 1, #list do
+        if not satisfies(list[i], predicates, source, pos, stop - 1) then
+            return kind, stop, 'invalid', i + 1
+        end
+    end
+    return kind, stop
+end
+
 --- capture_end returns the position after the bytes read greedily from
 --- first by the capture automaton a (until it has no transition).
 --- @param a table
@@ -474,7 +530,10 @@ end
 --- 'unterminated' marks a delimited token without close, which runs to the
 --- end of input; 'nested', with the position of the nested open as a fourth
 --- value, marks a delimited token whose nest is 'error' containing an open
---- of itself (the token still ends at its first close).
+--- of itself (the token still ends at its first close); 'invalid', with the
+--- index of the pattern as a fourth value, marks a pattern token whose text
+--- fails a pattern after the first of the array that defines it (its kind
+--- and stop are those of the first pattern).
 --- source is a string, or an input made by input(source) for repeated
 --- calls on the same string, which keeps the values of the lookaheads
 --- computed for the whole input; with a string they are computed for the
@@ -485,8 +544,8 @@ end
 --- @param mode string? nil or 'default'
 --- @return integer? kind
 --- @return integer? stop
---- @return string? problem 'unterminated' or 'nested'
---- @return integer? at position of the nested open
+--- @return string? problem 'unterminated', 'nested' or 'invalid'
+--- @return integer? at position of the nested open, or index of the pattern
 local function tokenize(compiled, source, pos, mode)
     if type(compiled) ~= 'table' then
         error('compiled must be table, got ' .. type(compiled), 2)
@@ -512,6 +571,7 @@ local function tokenize(compiled, source, pos, mode)
         return nil
     end
     local lexer = compiled.lexer
+    local checks = lexer.checks
     -- leading tokens are tried at the start of input only, before the rest
     local leading = pos == 1 and lexer.leading
     if leading then
@@ -523,6 +583,10 @@ local function tokenize(compiled, source, pos, mode)
             kind, stop = longest(leading, source, pos, len)
         end
         if kind then
+            local list = checks and checks[kind]
+            if list then
+                return check(list, lexer.predicates, kind, source, pos, stop)
+            end
             return kind, stop
         end
     end
@@ -537,6 +601,10 @@ local function tokenize(compiled, source, pos, mode)
         kind, stop = longest(lexer, source, pos, len)
     end
     if kind then
+        local list = checks and checks[kind]
+        if list then
+            return check(list, lexer.predicates, kind, source, pos, stop)
+        end
         return kind, stop
     end
     -- kind 1 is INVALID: a byte that starts no token
