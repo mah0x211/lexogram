@@ -1393,6 +1393,105 @@ function testcase.parse_rejects_invalid_counts()
     })
 end
 
+function testcase.parse_reads_aliases_in_rules()
+    -- a group or a reference, reported as a rule
+    assert.equal(parse_ok('(a b)->c', 'rules'), {
+        type = 'alias',
+        pos = 2,
+        item = seq({
+            ref(2, 'a'),
+            ref(4, 'b'),
+        }),
+        name = 'c',
+        name_pos = 8,
+    })
+    assert.equal(parse_ok('(x) -> c d', 'rules'), seq({
+        {
+            type = 'alias',
+            pos = 2,
+            item = ref(2, 'x'),
+            name = 'c',
+            name_pos = 8,
+        },
+        ref(10, 'd'),
+    }))
+    -- nested, and over a count
+    local ast = parse_ok('((a)->b){2}', 'rules')
+    assert.equal(ast.type, 'seq')
+    assert.equal(ast.items[2].type, 'alias')
+    assert.not_rawequal(ast.items[1], ast.items[2])
+    check_errors({
+        -- the range of an alias is written in parentheses
+        {
+            'a->c',
+            2,
+            'invalid_alias',
+        },
+        {
+            'a b->c',
+            4,
+            'invalid_alias',
+        },
+        -- a repetition of an alias is written with a group around it
+        {
+            '(a)->c*',
+            7,
+            'repeated_postfix',
+        },
+        {
+            '(a)->c{2}',
+            7,
+            'repeated_postfix',
+        },
+        {
+            '(a)->b->c',
+            7,
+            'repeated_postfix',
+        },
+        -- an alias of a repetition, too
+        {
+            'a*->c',
+            3,
+            'repeated_postfix',
+        },
+        {
+            'a{2}->c',
+            5,
+            'repeated_postfix',
+        },
+        -- a rule name must follow
+        {
+            '(a)->',
+            4,
+            'invalid_alias',
+        },
+        {
+            '(a)->"x"',
+            4,
+            'invalid_alias',
+        },
+        {
+            '(a)->(b)',
+            4,
+            'invalid_alias',
+        },
+    }, 'rules')
+    -- tokens are no rules
+    check_errors({
+        {
+            '("a")->c',
+            6,
+            'alias_not_allowed',
+        },
+        -- a "-" alone is still no operator
+        {
+            '"a" - "b"',
+            5,
+            'unexpected_char',
+        },
+    })
+end
+
 function testcase.parse_reads_lookaheads_in_tokens()
     local ast = parse_ok('"x" (?!("ab" | "ac")) (?= DIGIT "-"*)')
     assert.equal(ast.type, 'seq')

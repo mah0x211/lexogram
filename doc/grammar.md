@@ -333,6 +333,7 @@ pattern  = choice
 choice   = sequence ("|" sequence)* | sequence ("/" sequence)*
 sequence = repeat+
 repeat   = primary (("?" | "*" | "+" | count) "+"?)?
+         | "(" choice ")" "->" name
 count    = "{" digits ("," digits?)? "}"
 primary  = literal | class | name | "(" choice ")"
          | "(?=" choice ")" | "(?!" choice ")"
@@ -351,8 +352,10 @@ primary  = literal | class | name | "(" choice ")"
 | `A{n}`, `A{n,}`, `A{n,m}` | Exactly `n`, at least `n`, from `n` to `m` times | yes | yes |
 | `A{n,}+`, `A{n,m}+` | The same, possessive | no | yes |
 | `(A)` | Grouping | yes | yes |
+| `(A)->name` | Alias: the range of `A` is reported as the rule `name` | no | yes |
 | `(?=A)`, `(?!A)` | Lookahead, positive and negative: consumes nothing (see [Lookaheads](#lookaheads)) | yes | no |
 
+- An alias reports a part of a pattern with the kind of a rule: its range gets the ENTER and EXIT events of the rule `name`, which must be a rule with a kind (a name that does not start with `_`). It lets a grammar write the same construct in two ways and report both alike: `(name "{" "}")->call` is a `call` as `name "(" ")"` in the rule `call` is. An alias of a rule with a kind contains it (`(exp)->x` is an `x` around an `exp`), and the kinds of the compiled object stay those of the rules. The range of an alias is always written in parentheses, also for one reference (`(x)->name`); a repetition of an alias is written with a group around it (`((A)->name)*`), and so is an alias of a repetition (`(A*)->name`). The rule that an alias names counts as used. A diagnostic inside an alias names the rule it is written in. Errors: `alias_not_allowed` in tokens, `invalid_alias` without parentheses before `->` or a rule name after it, `undefined_reference` and `invalid_reference` for the name.
 - A count is written without white space inside the braces; `n` and `m` are at most 1000, `m` is not below `n`, and a count of zero times only (`{0}`, `{0,0}`) is an error. `A{n}` is `n` copies of `A` in sequence, `A{n,}` is `n - 1` copies followed by `A+` (`A*` for `{0,}`), and `A{n,m}` is `n` copies followed by `m - n` nested optional copies (`A{1,3}` is `A (A A?)?`): a grammar that uses counts is analyzed as if written that way, and a diagnostic names the count (`{1,3}+`). The counts of one pattern may make at most 10000 nodes. `A{n}+` is an error, since a fixed count has nothing to make possessive (`invalid_repetition` for these errors).
 - Postfix operators bind tighter than sequences (the `+` of a possessive operator follows the operator directly, without white space), and sequences tighter than choices. `|` and `/` cannot be mixed in one choice; group one of them with parentheses.
 - White space outside quotes and brackets is ignored. Patterns are written in Lua long brackets (`[[ ... ]]`), where the escapes of Lua do not apply; a pattern that contains `]]` is written in `[=[ ... ]=]`.
@@ -425,7 +428,7 @@ The compilation also rejects a repetition of an element that can match nothing (
 | Kind | Codes |
 |---|---|
 | Structure | `invalid_type`, `missing_field`, `unknown_field`, `invalid_key`, `invalid_value`, `invalid_version`, `version_too_new`, `version_too_old`, `empty_item`, `duplicate_item`, `reserved_item`, `invalid_name`, `reserved_name`, `duplicate_name`, `undefined_reference`, `invalid_reference`, `undeclared_literal` |
-| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `lookahead_not_allowed`, `invalid_lookahead`, `invalid_repetition`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
+| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `lookahead_not_allowed`, `invalid_lookahead`, `invalid_repetition`, `alias_not_allowed`, `invalid_alias`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
 | Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `invalid_contextual`, `automaton_too_large` |
 | Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice`, `ambiguous_repetition` |
 | Warnings | `never_adopted`, `unneeded_possessive`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |

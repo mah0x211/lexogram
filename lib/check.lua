@@ -1261,6 +1261,30 @@ local function check_pattern_ref(ctx, entry, node, accepted, expected)
                           describe_kinds(set) .. ', not a ' .. expected)
 end
 
+--- check_alias checks an alias node of a rule pattern: its name must be a
+--- rule with a kind (one whose name does not start with "_"), whose kind
+--- the range of the alias is reported with.
+--- @param ctx table
+--- @param entry table parsed pattern
+--- @param node table alias node
+local function check_alias(ctx, entry, node)
+    local name = node.name
+    local set = ctx.kinds[name]
+    local at = {
+        pos = node.name_pos,
+    }
+    if not set then
+        add_pattern_error(ctx, entry, at, 'undefined_reference',
+                          ' aliases undefined rule ' .. quote(name))
+    elseif not set.rule or byte(name, 1) == UNDERSCORE then
+        add_pattern_error(ctx, entry, at, 'invalid_reference',
+                          ' aliases ' .. quote(name) .. ', which is ' ..
+                              (set.rule and 'a rule without a kind' or
+                                  describe_kinds(set)) ..
+                              ', not a rule with a kind')
+    end
+end
+
 -- Kinds a token pattern and a rule pattern may refer to.
 local TOKEN_REFS = {
     fragment = true,
@@ -1299,6 +1323,11 @@ local function visit_rule_pattern(ctx, entry, usage)
             usage.names[node.name] = true
             edges[#edges + 1] = node.name
             check_pattern_ref(ctx, entry, node, RULE_REFS, 'token or rule')
+        elseif node.type == 'alias' then
+            -- the aliased rule gives the kind; it counts as used
+            usage.names[node.name] = true
+            edges[#edges + 1] = node.name
+            check_alias(ctx, entry, node)
         elseif node.type == 'literal' then
             local v = node.value
             usage.literals[v] = true

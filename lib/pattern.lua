@@ -32,7 +32,10 @@
 -- copies of the primary, then a plus or star node for {n,}, or nested opt
 -- nodes for the m - n optional copies; these repetition nodes have count
 -- (the text of the count), and, when a "+" after the count makes them
--- possessive, group, a table that they share. In the 'tokens' context,
+-- possessive, group, a table that they share. In the 'rules' context, an
+-- alias "->" name after a group gives { type = 'alias', item, name,
+-- name_pos }: the range of the item is reported as the rule name. In the
+-- 'tokens' context,
 -- the names of the captures of a delimited token table may also be given;
 -- they resolve to capture nodes.
 -- Groups may be nested at most MAX_NESTING levels deep (nesting_too_deep).
@@ -73,6 +76,7 @@ local COMMA = 44
 local ZERO = 48
 local NINE = 57
 local EQUALS = 61
+local GREATER = 62
 local QUESTION = 63
 local LBRACKET = 91
 local BACKSLASH = 92
@@ -750,6 +754,17 @@ local function reject_ordered_choice(_, pos)
          'ordered choice "/" is not allowed in this context')
 end
 
+--- reject_alias rejects an alias in a context without them.
+--- @param _ table parser state
+--- @param pos integer position of the "->"
+local function reject_alias(_, pos)
+    fail(pos, 'alias_not_allowed', 'alias "->" is not allowed in this context')
+end
+
+--- accept_alias accepts an alias.
+local function accept_alias()
+end
+
 --- accept_ordered_choice makes "/" the current token.
 --- @param p table parser state
 --- @param pos integer
@@ -767,6 +782,7 @@ local CONTEXTS = {
         on_slash = reject_ordered_choice,
         on_possessive = reject_possessive,
         on_lookahead = accept_lookahead,
+        on_alias = reject_alias,
     },
     rules = {
         resolve_name = resolve_rules_name,
@@ -774,6 +790,7 @@ local CONTEXTS = {
         on_slash = accept_ordered_choice,
         on_possessive = accept_possessive,
         on_lookahead = reject_lookahead,
+        on_alias = accept_alias,
     },
 }
 
@@ -826,6 +843,8 @@ local function advance(p)
         p.kind, p.pos = SYMBOLS[b], i + 1
     elseif b == SLASH then
         p.context.on_slash(p, i)
+    elseif b == HYPHEN and byte(p.src, i + 1) == GREATER then
+        p.kind, p.pos = '->', i + 2
     else
         fail(i, 'unexpected_char', 'unexpected character')
     end
@@ -1063,6 +1082,29 @@ local function parse_count(p, node)
     return expand_count(node, min, max, count, possessive)
 end
 
+--- parse_alias parses the name after "->" (the current token) and returns
+--- node aliased to it.
+--- @param p table parser state
+--- @param node table
+--- @return table
+local function parse_alias(p, node)
+    p.context.on_alias(p, p.tpos)
+    local arrow = p.tpos
+    advance(p)
+    local name = p.node
+    if p.kind ~= PRIMARY or name.type ~= 'ref' then
+        fail(arrow, 'invalid_alias', 'a rule name is expected after "->"')
+    end
+    advance(p)
+    return {
+        type = 'alias',
+        pos = node.pos,
+        item = node,
+        name = name.name,
+        name_pos = name.pos,
+    }
+end
+
 --- parse_repeat parses a primary with an optional postfix operator, which a
 --- "+" right after it makes possessive (?+, *+, ++), or with a count (see
 --- parse_count). It returns nil if the current token cannot start a
@@ -1071,22 +1113,36 @@ end
 --- @return table? node
 local function parse_repeat(p)
     local node
+    local grouped = p.kind == '('
     if p.kind == PRIMARY then
         node = p.node
         advance(p)
-    elseif p.kind == '(' then
+    elseif grouped then
         node = parse_group(p)
     else
         return nil
     end
 
+    if p.kind == '->' then
+        -- the range of an alias is always written in parentheses
+        if not grouped then
+            fail(p.tpos, 'invalid_alias',
+                 'an alias follows a group: write (p)->name')
+        end
+        node = parse_alias(p, node)
+        if POSTFIX[p.kind] or p.kind == '{' or p.kind == '->' then
+            fail(p.tpos, 'repeated_postfix',
+                 'postfix operator follows an alias; write ((p)->name)*')
+        end
+        return node
+    end
     local t = POSTFIX[p.kind]
     if (t or p.kind == '{') and node.type == 'lookahead' then
         fail(p.tpos, 'invalid_lookahead', 'a lookahead cannot be repeated')
     elseif p.kind == '{' then
         node = parse_count(p, node)
         advance(p)
-        if POSTFIX[p.kind] or p.kind == '{' then
+        if POSTFIX[p.kind] or p.kind == '{' or p.kind == '->' then
             fail(p.tpos, 'repeated_postfix',
                  'postfix operator follows another postfix operator')
         end
@@ -1103,7 +1159,7 @@ local function parse_repeat(p)
             p.pos = p.pos + 1
         end
         advance(p)
-        if POSTFIX[p.kind] or p.kind == '{' then
+        if POSTFIX[p.kind] or p.kind == '{' or p.kind == '->' then
             fail(p.tpos, 'repeated_postfix',
                  'postfix operator follows another postfix operator')
         end
