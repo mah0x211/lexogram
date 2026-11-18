@@ -55,7 +55,9 @@ local next = next
 local ipairs = ipairs
 local sort = table.sort
 local concat = table.concat
-local tokenize = require('lexogram.tokenizer').tokenize
+local tokenizer = require('lexogram.tokenizer')
+local tokenize = tokenizer.tokenize
+local new_input = tokenizer.input
 local quote = require('lexogram.text').quote
 local codegen = require('lexogram.compile.codegen')
 local events_module = require('lexogram.events')
@@ -193,6 +195,8 @@ local function parse(compiled, source)
     local qk, qs, qe = {}, {}, {}
     local qh, qt = 1, 0
     local raw_pos = 1
+    -- the source with the values of its lookaheads (see lexogram.tokenizer)
+    local input = new_input(source)
     local failure -- error of a delimited token
 
     -- frames: return address, rule kind, ENTER event number, start, and
@@ -215,7 +219,7 @@ local function parse(compiled, source)
         if raw_pos > len or failure then
             return false
         end
-        local k, stop, problem, at = tokenize(compiled, source, raw_pos)
+        local k, stop, problem, at = tokenize(compiled, input, raw_pos)
         qt = qt + 1
         qk[qt], qs[qt], qe[qt] = k, raw_pos, stop
         if problem == 'unterminated' then

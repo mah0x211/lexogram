@@ -1227,6 +1227,53 @@ function testcase.parse_reads_possessive_repetitions_in_rules()
     })
 end
 
+function testcase.parse_reads_lookaheads_in_tokens()
+    local ast = parse_ok('"x" (?!("ab" | "ac")) (?= DIGIT "-"*)')
+    assert.equal(ast.type, 'seq')
+    local neg, pos = ast.items[2], ast.items[3]
+    assert.equal(neg.type, 'lookahead')
+    assert.is_true(neg.negative)
+    assert.equal(neg.pos, 5)
+    assert.equal(neg.item.type, 'choice')
+    assert.equal(pos.type, 'lookahead')
+    assert.is_false(pos.negative)
+    assert.equal(pos.item.type, 'seq')
+    -- nested, and inside a repetition
+    ast = parse_ok('("a" (?="b" (?!"c")))*')
+    assert.equal(ast.type, 'star')
+    local inner = ast.item.items[2]
+    assert.equal(inner.type, 'lookahead')
+    assert.equal(inner.item.items[2].type, 'lookahead')
+    -- a group that starts with "?" is not a lookahead
+    assert.equal(parse_err('(? "a")'), {
+        pos = 2,
+        code = 'missing_operand',
+    })
+    check_errors({
+        -- a lookahead consumes nothing, so repeating it means nothing
+        {
+            '(?="a")*',
+            8,
+            'invalid_lookahead',
+        },
+        {
+            '(?=)',
+            4,
+            'missing_operand',
+        },
+        {
+            '(?="a"',
+            1,
+            'unbalanced_paren',
+        },
+    })
+    -- rules choose with token lookahead instead
+    assert.equal(parse_err('a (?=b)', 'rules'), {
+        pos = 3,
+        code = 'lookahead_not_allowed',
+    })
+end
+
 function testcase.parse_reports_first_error_from_left()
     check_errors({
         {

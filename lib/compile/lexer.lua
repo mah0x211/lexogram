@@ -42,6 +42,7 @@ local quote = require('lexogram.text').quote
 local nfa = require('lexogram.compile.nfa')
 local dfa = require('lexogram.compile.dfa')
 local delimited = require('lexogram.compile.delimited')
+local lookahead = require('lexogram.compile.lookahead')
 local get_limit = require('lexogram.compile.limits').get
 
 -- Byte value of "_", which starts a fragment name.
@@ -232,24 +233,63 @@ local function check_recursion(diagnostics, fragments)
 end
 
 --- check_conflicts adds empty_match, token_conflict and literal_conflict
---- errors.
+--- errors. For an automaton with lookaheads (dispatch states), only the
+--- states that an input can reach with consistent predicates are checked
+--- (see lexogram.compile.lookahead.reachable); it returns an
+--- automaton_too_large error when that analysis exceeds its limit.
 --- @param diagnostics table[]
 --- @param defs table[]
 --- @param d table
-local function check_conflicts(diagnostics, defs, d)
-    for _, id in ipairs(d.accept_sets[1]) do
-        local def = defs[id]
-        if def.kind == 'token' then
-            add_error(diagnostics, 'empty_match', def.segments,
-                      label(def) .. ' matches the empty string')
+--- @param predicates table[]? result of lexogram.compile.lookahead.build
+--- @param max integer largest number of configurations of the analysis
+--- @return table? err
+local function check_conflicts(diagnostics, defs, d, predicates, max)
+    local example, states
+    if d.dispatch then
+        local found, err = lookahead.reachable(d, predicates, max)
+        if not found then
+            return err
+        end
+        example = function(s)
+            return found[s]
+        end
+        states = {}
+        for s in next, found do
+            states[#states + 1] = s
+        end
+        sort(states, function(a, b)
+            if #found[a] ~= #found[b] then
+                return #found[a] < #found[b]
+            end
+            return a < b
+        end)
+    else
+        example = delimited.examples(d)
+        states = {}
+        for s = 1, d.nstates do
+            states[s] = s
         end
     end
 
-    local example = delimited.examples(d)
+    local empty = {}
+    for _, s in ipairs(states) do
+        if example(s) == '' then
+            for _, id in ipairs(d.accept_sets[s]) do
+                local def = defs[id]
+                if def.kind == 'token' and not empty[id] then
+                    empty[id] = true
+                    add_error(diagnostics, 'empty_match', def.segments,
+                              label(def) .. ' matches the empty string')
+                end
+            end
+        end
+    end
+
     local seen = {}
-    -- state 1 would give an empty example; empty_match covers it
-    for s = 2, d.nstates do
-        local ids = d.accept_sets[s]
+    -- a state reached without input gives an empty example; empty_match
+    -- covers it
+    for _, s in ipairs(states) do
+        local ids = example(s) == '' and {} or d.accept_sets[s]
         for i = 1, #ids do
             local a = defs[ids[i]]
             for j = i + 1, #ids do
@@ -389,9 +429,10 @@ end
 --- largest number of states of every non-deterministic automaton (passed
 --- to nfa.build) and of every deterministic automaton (passed to dfa.build)
 --- built for the grammar; each defaults to the builder's MAX_STATES
---- @return table? result { defs, dfa, leading, delimited }, nil when there
---- is an error; leading is the automaton of the leading tokens (nil without
---- them)
+--- @return table? result { defs, dfa, leading, delimited, predicates }, nil
+--- when there is an error; leading is the automaton of the leading tokens
+--- (nil without them), predicates the automata of the predicates of the
+--- lookaheads (see lexogram.compile.lookahead; nil without them)
 --- @return table[] diagnostics { severity, code, segments, pos, message }
 local function build(grammar, limits)
     -- read here, so that an invalid limit raises at the caller of build
@@ -410,7 +451,8 @@ local function build(grammar, limits)
         return nil, diagnostics
     end
 
-    local machine, err = nfa.build(nfa_defs, fragments, limits.nfa)
+    local preds = nfa.new_predicates()
+    local machine, err = nfa.build(nfa_defs, fragments, limits.nfa, preds)
     if not machine then
         return too_large(diagnostics, err)
     end
@@ -422,7 +464,7 @@ local function build(grammar, limits)
 
     local leading
     if #leading_defs > 0 then
-        machine, err = nfa.build(leading_defs, fragments, limits.nfa)
+        machine, err = nfa.build(leading_defs, fragments, limits.nfa, preds)
         if not machine then
             return too_large(diagnostics, err)
         end
@@ -439,11 +481,26 @@ local function build(grammar, limits)
         return too_large(diagnostics, err)
     end
 
-    check_conflicts(diagnostics, defs, d)
+    local predicates
+    if #preds.list > 0 then
+        predicates, err = lookahead.build(preds, fragments, limits)
+        if not predicates then
+            return too_large(diagnostics, err)
+        end
+    end
+
+    local max = limits.dfa.max_states
+    err = check_conflicts(diagnostics, defs, d, predicates, max)
+    if err then
+        return too_large(diagnostics, err)
+    end
     -- leading tokens are checked among themselves only: at the start of
     -- input they win over every other token
     if leading then
-        check_conflicts(diagnostics, defs, leading)
+        err = check_conflicts(diagnostics, defs, leading, predicates, max)
+        if err then
+            return too_large(diagnostics, err)
+        end
     end
     if #diagnostics > 0 then
         return nil, diagnostics
@@ -454,6 +511,7 @@ local function build(grammar, limits)
         dfa = d,
         leading = leading,
         delimited = compiled,
+        predicates = predicates,
     }, diagnostics
 end
 

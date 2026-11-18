@@ -24,7 +24,18 @@
 -- with flat transition arrays for the runtime and the accept information
 -- needed for longest match and conflict diagnosis. Every traversal is
 -- iterative.
+--
+-- Guarded epsilon edges (lookaheads) are resolved at compile time: a set
+-- of NFA states from which guarded edges are reachable becomes a dispatch
+-- state, which consumes nothing and selects, by the values of those
+-- predicates at the current position, one of its targets: the closure
+-- under that valuation, an ordinary state. dispatch[s] = { preds, targets }
+-- (targets[v + 1] for the valuation v, whose bit j - 1 is the value of
+-- preds[j]); a dispatch state has no transitions and accepts nothing. The
+-- runtime only evaluates the predicates.
 local ipairs = ipairs
+local next = next
+local floor = math.floor
 local concat = table.concat
 local sort = table.sort
 local byte = string.byte
@@ -84,6 +95,87 @@ local function closure(machine, list)
     return list
 end
 
+--- guards_of returns the sorted distinct predicates of the guarded edges
+--- reachable from set through epsilon and guarded edges.
+--- @param machine table
+--- @param set integer[] closed under epsilon edges
+--- @return integer[]
+local function guards_of(machine, set)
+    local geps = machine.geps
+    if not geps or next(geps) == nil then
+        return {}
+    end
+    local seen, stack, preds, found = {}, {}, {}, {}
+    for i, s in ipairs(set) do
+        seen[s] = true
+        stack[i] = s
+    end
+    while #stack > 0 do
+        local s = stack[#stack]
+        stack[#stack] = nil
+        for _, t in ipairs(machine.eps[s] or {}) do
+            if not seen[t] then
+                seen[t] = true
+                stack[#stack + 1] = t
+            end
+        end
+        for _, g in ipairs(geps[s] or {}) do
+            if not found[g[2]] then
+                found[g[2]] = true
+                preds[#preds + 1] = g[2]
+            end
+            if not seen[g[1]] then
+                seen[g[1]] = true
+                stack[#stack + 1] = g[1]
+            end
+        end
+    end
+    sort(preds)
+    return preds
+end
+
+--- guarded_closure returns the sorted closure of set through epsilon edges
+--- and the guarded edges whose predicate has its value in the valuation v
+--- of preds (bit j - 1 of v is the value of preds[j]).
+--- @param machine table
+--- @param set integer[]
+--- @param preds integer[]
+--- @param v integer
+--- @return integer[]
+local function guarded_closure(machine, set, preds, v)
+    local value = {}
+    for j, p in ipairs(preds) do
+        value[p] = floor(v / 2 ^ (j - 1)) % 2 == 1
+    end
+    local list, seen, stack = {}, {}, {}
+    for i, s in ipairs(set) do
+        seen[s] = true
+        list[i] = s
+        stack[i] = s
+    end
+    local geps = machine.geps
+    while #stack > 0 do
+        local s = stack[#stack]
+        stack[#stack] = nil
+        for _, t in ipairs(machine.eps[s] or {}) do
+            if not seen[t] then
+                seen[t] = true
+                list[#list + 1] = t
+                stack[#stack + 1] = t
+            end
+        end
+        for _, g in ipairs(geps[s] or {}) do
+            if value[g[2]] == g[3] and not seen[g[1]] then
+                seen[g[1]] = true
+                list[#list + 1] = g[1]
+                stack[#stack + 1] = g[1]
+            end
+        end
+    end
+    sort(list)
+    return list
+end
+
 --- accept_ids returns the sorted distinct ids accepted by the NFA states
 --- in set.
 --- @param machine table
@@ -131,43 +223,94 @@ local function moves(machine, set, class_of)
 end
 
 --- subset_construction builds the DFA over classes. States are numbered
---- in discovery order (start = 1); the dead state is 0.
+--- in discovery order (start = 1); the dead state is 0. A set from which
+--- guarded edges are reachable becomes a dispatch state (see above).
 --- @param machine table
 --- @param class_of integer[]
 --- @param nclasses integer
 --- @param max_states integer
---- @return table? dfa { n, trans (state -> class -> state), sets }
+--- @return table? dfa { n, trans (state -> class -> state), sets, dispatch
+--- (state -> { preds, targets }) }
 local function subset_construction(machine, class_of, nclasses, max_states)
+    local index, sets, dispatch = {}, {}, {}
+    local full = false
+
+    -- intern returns the state of the ordinary set (closed under the edges
+    -- it takes), or nil when the limit is reached
+    local function intern(set)
+        local key = concat(set, ',')
+        local s = index[key]
+        if not s then
+            if #sets >= max_states then
+                full = true
+                return nil
+            end
+            sets[#sets + 1] = set
+            s = #sets
+            index[key] = s
+        end
+        return s
+    end
+
+    -- intern_pre returns the state of the set reached by consuming bytes
+    -- (closed under epsilon edges only): a dispatch state when guarded
+    -- edges are reachable from it
+    local function intern_pre(set)
+        local preds = guards_of(machine, set)
+        if #preds == 0 then
+            return intern(set)
+        end
+        local key = 'D' .. concat(set, ',')
+        local s = index[key]
+        if not s then
+            if #sets >= max_states then
+                full = true
+                return nil
+            end
+            sets[#sets + 1] = set
+            s = #sets
+            index[key] = s
+            dispatch[s] = {
+                preds = preds,
+            }
+        end
+        return s
+    end
+
     local initial = {}
     initial[1] = machine.start
-    local start = closure(machine, initial)
-    local index = {
-        [concat(start, ',')] = 1,
-    }
-    local sets = {
-        start,
-    }
+    -- the start state always fits: max_states is at least 1
+    intern_pre(closure(machine, initial))
     local trans = {}
     local head = 1
     while sets[head] do
         local row = {}
-        local buckets = moves(machine, sets[head], class_of)
-        for c = 1, nclasses do
-            local target = 0
-            if buckets[c] then
-                local set = closure(machine, buckets[c])
-                local key = concat(set, ',')
-                target = index[key]
-                if not target then
-                    if #sets >= max_states then
-                        return nil
-                    end
-                    sets[#sets + 1] = set
-                    target = #sets
-                    index[key] = target
+        local d = dispatch[head]
+        if d then
+            local targets = {}
+            for v = 0, 2 ^ #d.preds - 1 do
+                targets[v + 1] = intern(guarded_closure(machine, sets[head],
+                                                        d.preds, v))
+                if full then
+                    return nil
                 end
             end
-            row[c] = target
+            d.targets = targets
+            for c = 1, nclasses do
+                row[c] = 0
+            end
+        else
+            local buckets = moves(machine, sets[head], class_of)
+            for c = 1, nclasses do
+                local target = 0
+                if buckets[c] then
+                    target = intern_pre(closure(machine, buckets[c]))
+                    if full then
+                        return nil
+                    end
+                end
+                row[c] = target
+            end
         end
         trans[head] = row
         head = head + 1
@@ -176,6 +319,7 @@ local function subset_construction(machine, class_of, nclasses, max_states)
         n = #sets,
         trans = trans,
         sets = sets,
+        dispatch = dispatch,
     }
 end
 
@@ -186,13 +330,16 @@ end
 --- state order, so the result is deterministic. Complexity: O(n * k) per
 --- round for n states and k classes, at most n rounds (O(n^2 * k) in the
 --- worst case; few rounds in practice).
+--- A dispatch state starts in a block of the dispatch states with the same
+--- predicates, and is split by the blocks of its targets.
 --- @param n integer
 --- @param trans table state -> class -> state
---- @param keys string[] accept set key of each state
+--- @param keys string[] initial key of each state
 --- @param nclasses integer
+--- @param dispatch table state -> { preds, targets }
 --- @return integer[] block state -> block
 --- @return integer nblocks
-local function minimize(n, trans, keys, nclasses)
+local function minimize(n, trans, keys, nclasses, dispatch)
     local block, nblocks = {}, 0
     local index = {}
     for s = 1, n do
@@ -211,12 +358,23 @@ local function minimize(n, trans, keys, nclasses)
         local sig = {}
         for s = 1, n do
             sig[1] = block[s]
-            local row = trans[s]
-            for c = 1, nclasses do
-                local t = row[c]
-                sig[c + 1] = t == 0 and 0 or block[t]
+            local d = dispatch[s]
+            local len
+            if d then
+                local targets = d.targets
+                len = #targets + 1
+                for j = 1, #targets do
+                    sig[j + 1] = block[targets[j]]
+                end
+            else
+                len = nclasses + 1
+                local row = trans[s]
+                for c = 1, nclasses do
+                    local t = row[c]
+                    sig[c + 1] = t == 0 and 0 or block[t]
+                end
             end
-            local key = concat(sig, ',')
+            local key = concat(sig, ',', 1, len)
             local b = index[key]
             if not b then
                 count = count + 1
@@ -234,12 +392,14 @@ local function minimize(n, trans, keys, nclasses)
 end
 
 --- renumber orders the blocks breadth-first from the start block, visiting
---- classes in ascending order, and returns the minimized transition table.
+--- classes in ascending order (the targets of a dispatch state in
+--- valuation order), and returns the minimized transition table.
 --- @param raw table result of subset_construction
 --- @param block integer[]
 --- @param nclasses integer
 --- @return table rows new state -> class -> new state
 --- @return integer[] members new state -> a raw state of that block
+--- @return table dispatch new state -> { preds, targets }
 local function renumber(raw, block, nclasses)
     -- a representative raw state of each block
     local rep = {}
@@ -252,29 +412,44 @@ local function renumber(raw, block, nclasses)
     local members = {
         1,
     }
-    local rows = {}
+    local rows, dispatch = {}, {}
+    local function number_of(t)
+        local b = block[t]
+        local target = number[b]
+        if not target then
+            members[#members + 1] = rep[b]
+            target = #members
+            number[b] = target
+        end
+        return target
+    end
     local head = 1
     while members[head] do
         local row = {}
         local raw_row = raw.trans[members[head]]
+        local d = raw.dispatch[members[head]]
+        if d then
+            local targets = {}
+            for j, t in ipairs(d.targets) do
+                targets[j] = number_of(t)
+            end
+            local preds = {}
+            for j, p in ipairs(d.preds) do
+                preds[j] = p
+            end
+            dispatch[head] = {
+                preds = preds,
+                targets = targets,
+            }
+        end
         for c = 1, nclasses do
             local t = raw_row[c]
-            local target = 0
-            if t ~= 0 then
-                local b = block[t]
-                target = number[b]
-                if not target then
-                    members[#members + 1] = rep[b]
-                    target = #members
-                    number[b] = target
-                end
-            end
-            row[c] = target
+            row[c] = t == 0 and 0 or number_of(t)
         end
         rows[head] = row
         head = head + 1
     end
-    return rows, members
+    return rows, members, dispatch
 end
 
 --- merge_classes merges classes whose columns are identical in rows and
@@ -348,7 +523,7 @@ end
 --- @param limits table? { max_states } for tests only; max_states defaults
 --- to MAX_STATES
 --- @return table? d { nstates, nclasses, classes, trans, accept,
---- accept_sets, conflicts }
+--- accept_sets, conflicts, dispatch } (dispatch only with guarded edges)
 --- @return table? err { code = 'automaton_too_large', message }
 local function build(machine, rank, limits)
     local max_states = get_limit(limits, 'max_states', MAX_STATES)
@@ -364,11 +539,17 @@ local function build(machine, rank, limits)
 
     local sets_ids, keys = {}, {}
     for s = 1, raw.n do
-        sets_ids[s] = accept_ids(machine, raw.sets[s])
-        keys[s] = concat(sets_ids[s], ',')
+        local d = raw.dispatch[s]
+        if d then
+            sets_ids[s] = {}
+            keys[s] = 'D' .. concat(d.preds, ',')
+        else
+            sets_ids[s] = accept_ids(machine, raw.sets[s])
+            keys[s] = 'A' .. concat(sets_ids[s], ',')
+        end
     end
-    local block = minimize(raw.n, raw.trans, keys, nclasses)
-    local rows, members = renumber(raw, block, nclasses)
+    local block = minimize(raw.n, raw.trans, keys, nclasses, raw.dispatch)
+    local rows, members, dispatch = renumber(raw, block, nclasses)
     local classes, first = merge_classes(rows, class_of, nclasses)
 
     local nstates, nmerged = #rows, #first
@@ -397,21 +578,42 @@ local function build(machine, rank, limits)
         accept = accept,
         accept_sets = accept_sets,
         conflicts = conflicts,
+        dispatch = next(dispatch) ~= nil and dispatch or nil,
     }
 end
 
+--- resolve_dispatch returns s, or the target of the dispatch state s for
+--- the values that valuate(preds, pos) gives (the valuation number).
+--- @param d table
+--- @param s integer
+--- @param pos integer
+--- @param valuate function?
+--- @return integer
+local function resolve_dispatch(d, s, pos, valuate)
+    local dispatch = d.dispatch
+    local entry = dispatch and dispatch[s]
+    if entry then
+        return entry.targets[valuate(entry.preds, pos) + 1]
+    end
+    return s
+end
+
 --- run returns the state after consuming the whole string str from state
---- 1, or 0 if the dead state is reached.
+--- 1, or 0 if the dead state is reached. valuate(preds, pos) gives the
+--- valuation of the predicates of a dispatch state at a position.
 --- @param d table
 --- @param str string
+--- @param valuate function?
 --- @return integer
-local function run(d, str)
-    local s, nclasses, classes, trans = 1, d.nclasses, d.classes, d.trans
+local function run(d, str, valuate)
+    local nclasses, classes, trans = d.nclasses, d.classes, d.trans
+    local s = resolve_dispatch(d, 1, 1, valuate)
     for i = 1, #str do
         s = trans[(s - 1) * nclasses + classes[byte(str, i) + 1]]
         if s == 0 then
             return 0
         end
+        s = resolve_dispatch(d, s, i + 1, valuate)
     end
     return s
 end
@@ -423,17 +625,21 @@ end
 --- @param d table
 --- @param str string
 --- @param pos integer
+--- @param valuate function? see run
 --- @return integer? id
 --- @return integer? stop
-local function longest(d, str, pos)
-    local s, nclasses, classes, trans = 1, d.nclasses, d.classes, d.trans
+local function longest(d, str, pos, valuate)
+    local nclasses, classes, trans = d.nclasses, d.classes, d.trans
     local accept = d.accept
+    local s = resolve_dispatch(d, 1, pos, valuate)
     local id, stop
     for i = pos, #str do
         s = trans[(s - 1) * nclasses + classes[byte(str, i) + 1]]
         if s == 0 then
             break
-        elseif accept[s] ~= 0 then
+        end
+        s = resolve_dispatch(d, s, i + 1, valuate)
+        if accept[s] ~= 0 then
             id, stop = accept[s], i + 1
         end
     end

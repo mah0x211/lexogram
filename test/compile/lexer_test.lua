@@ -217,6 +217,57 @@ function testcase.build_reports_automaton_too_large()
     })
 end
 
+function testcase.build_reports_lookahead_automata_too_large()
+    -- the DFA of a predicate; the token automaton is small
+    local result, diagnostics = lexer.build(grammar({
+        t = '"x" (?=("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 4) .. ')',
+    }), {
+        dfa_states = 8,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 8 states'),
+    })
+
+    -- the analysis of the lookaheads of the token automaton
+    -- obligations made at different positions are at different states of
+    -- the automaton of the predicate, so they add up
+    local g = grammar({
+        t = '("a" (?=[a-z][a-z][a-z] "q"))+',
+    })
+    result, diagnostics = lexer.build(g, {
+        dfa_states = 6,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the analysis of the lookaheads would visit more than 6' ..
+                ' configurations'),
+    })
+
+    -- and of the leading automaton
+    g = grammar({
+        x = '"x"',
+        t = '("a" (?=[a-z][a-z][a-z] "q"))+',
+    })
+    g.leading = {
+        't',
+    }
+    result, diagnostics = lexer.build(g, {
+        dfa_states = 6,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the analysis of the lookaheads would visit more than 6' ..
+                ' configurations'),
+    })
+end
+
 function testcase.build_raises_for_invalid_limits()
     local g = grammar({
         t = '"t"',

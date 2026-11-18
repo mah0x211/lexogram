@@ -123,7 +123,7 @@ function testcase.tokenize_raises_for_invalid_arguments()
                 1,
                 1,
             },
-            'source must be string, got number',
+            'source must be string or input, got number',
         },
         {
             {

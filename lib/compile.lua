@@ -50,7 +50,26 @@
 --     nstates, trans     trans[(s - 1) * nclasses + c] is the state after
 --                        state s and a byte of class c; 0 is the dead state
 --                        (no transition). The start state is 1.
---     accept             accept[s] is the kind id accepted in state s, or 0
+--     accept             accept[s] is the kind id accepted in state s, or 0;
+--                        -1 marks a dispatch state
+--     dispatch           with lookaheads only: dispatch[s] = { preds,
+--                        targets } for a dispatch state s, which consumes
+--                        nothing: at a position, with v the valuation of
+--                        the predicates preds there (bit j - 1 set when
+--                        preds[j] holds), the state is targets[v + 1]
+--     predicates         with lookaheads only: array by predicate id of
+--                        { forward, distance, backward }: forward is an
+--                        automaton of the same shape (dead state 0 also
+--                        when the predicate can no longer hold): the
+--                        predicate holds at a position when it reaches a
+--                        state with accept ~= 0 from there (also without
+--                        a bound on the bytes it reads); distance is the
+--                        largest number of bytes such a run reads, or false
+--                        without a bound, in which case backward is an
+--                        automaton that, run from the end of the input
+--                        toward its start (from state 1, resolving its
+--                        dispatch states at each position), accepts at
+--                        position i when the predicate holds there
 --     leading            an automaton of the same shape over the leading
 --                        tokens (listed in leading), which the automaton
 --                        above does not have; absent without them
@@ -86,7 +105,10 @@
 -- string after the open (without one, the token runs to the end of the
 -- input). Otherwise the longest prefix accepted by lexer wins, with the
 -- kind accept[s] of its final state; a byte that starts no token is
--- INVALID.
+-- INVALID. In an automaton with dispatch states, a dispatch state reached
+-- at a position (the start state at the start position, or the state after
+-- a byte at the position after it) is replaced by its target for the
+-- values of its predicates at that position before anything else.
 --
 --   syntax    the rules as instructions (see lexogram.compile.codegen for
 --             the instruction set and the shape of each construct):
@@ -130,13 +152,47 @@ end
 --- @param d table
 --- @return table
 local function automaton(d)
+    local dispatch
+    local accept = copy_array(d.accept)
+    if d.dispatch then
+        dispatch = {}
+        for s, entry in next, d.dispatch do
+            dispatch[s] = {
+                preds = copy_array(entry.preds),
+                targets = copy_array(entry.targets),
+            }
+            -- the runtime looks at accept on every state; a dispatch state
+            -- accepts nothing, so the mark costs nothing on other states
+            accept[s] = -1
+        end
+    end
     return {
         nclasses = d.nclasses,
         classes = copy_array(d.classes),
         nstates = d.nstates,
         trans = copy_array(d.trans),
-        accept = copy_array(d.accept),
+        accept = accept,
+        dispatch = dispatch,
     }
+end
+
+--- predicate_automata returns the compiled predicates of
+--- lexogram.compile.lookahead.build, or nil without lookaheads.
+--- @param list table[]?
+--- @return table[]?
+local function predicate_automata(list)
+    if not list then
+        return nil
+    end
+    local out = {}
+    for id, entry in ipairs(list) do
+        out[id] = {
+            forward = automaton(entry.forward),
+            distance = entry.distance,
+            backward = entry.backward and automaton(entry.backward),
+        }
+    end
+    return out
 end
 
 --- delimited_entries returns the compiled delimited tokens in the order
@@ -215,6 +271,7 @@ local function build_object(grammar, lexer, syntax)
     automata.leading = lexer.leading and automaton(lexer.leading)
     automata.open = automaton(lexer.delimited.open)
     automata.delimited = delimited_entries(lexer.delimited.entries)
+    automata.predicates = predicate_automata(lexer.predicates)
     return {
         lexogram = resolve_version(rawget(grammar, 'lexogram')),
         name = rawget(grammar, 'name'),

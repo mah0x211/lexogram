@@ -285,6 +285,201 @@ end
 
 -- minimality
 
+-- lookaheads
+
+-- build the NFA and the DFA of defs with their predicates; returns the DFA,
+-- the machine and the machines of the predicates
+local function build_lookahead(defs, fragments)
+    local preds = nfa.new_predicates()
+    local machine = assert(nfa.build(defs, fragments or {}, nil, preds))
+    local machines = {}
+    local id = 1
+    while preds.list[id] do
+        machines[id] = assert(nfa.build_predicate(id, preds, fragments or {}))
+        id = id + 1
+    end
+    local rank = {}
+    for _, def in ipairs(defs) do
+        rank[def.id] = def.literal and 1 or 2
+    end
+    return assert(dfa.build(machine, rank)), machine, machines
+end
+
+-- the valuation function of the predicates over the whole input str, as
+-- the NFA simulator evaluates them
+local function valuation_of(machines, str)
+    return function(preds, pos)
+        local v = 0
+        for j, p in ipairs(preds) do
+            if nfa.holds(machines, p, str, pos) then
+                v = v + 2 ^ (j - 1)
+            end
+        end
+        return v
+    end
+end
+
+function testcase.build_resolves_lookaheads_with_dispatch_states()
+    local d = build_lookahead({
+        {
+            id = 1,
+            ast = P('"x" (?!"a") [a-z]'),
+        },
+    })
+    -- the state after "x" dispatches on the predicate "a"
+    local after_x = d.trans[d.classes[string.byte('x') + 1]]
+    assert.equal(d.dispatch[after_x].preds, {
+        1,
+    })
+    assert.equal(#d.dispatch[after_x].targets, 2)
+    assert.equal(d.accept[after_x], 0)
+    -- without lookaheads there is no dispatch
+    assert.is_nil(build1('"x" [a-z]').dispatch)
+end
+
+function testcase.build_matches_nfa_with_lookaheads_on_all_short_strings()
+    local defs = {
+        {
+            id = 1,
+            ast = P('"x" (?!("ab" | "ac")) [a-c]*'),
+        },
+        {
+            id = 2,
+            ast = P('"a" (?="a"* "b") [ab]'),
+        },
+        {
+            id = 3,
+            ast = P('[a-c]+ (?![a-c])'),
+        },
+        {
+            id = 4,
+            ast = P('"x" (?="a" (?!"b")) "a" [a-c]?'),
+        },
+        {
+            id = 5,
+            literal = 'ab',
+        },
+    }
+    local d, machine, machines = build_lookahead(defs)
+    local alphabet = {
+        'a',
+        'b',
+        'c',
+        'x',
+    }
+    without_hook(function()
+        local strings = {
+            '',
+        }
+        local head = 1
+        while strings[head] do
+            local str = strings[head]
+            head = head + 1
+            local s = dfa.run(d, str, valuation_of(machines, str))
+            assert.equal({
+                str,
+                s == 0 and {} or d.accept_sets[s],
+            }, {
+                str,
+                nfa.accepts(machine, str, machines),
+            })
+            if #str < 6 then
+                for _, c in ipairs(alphabet) do
+                    strings[#strings + 1] = str .. c
+                end
+            end
+        end
+    end)
+end
+
+function testcase.build_stops_at_state_limit_with_lookaheads()
+    local preds = nfa.new_predicates()
+    local machine = assert(nfa.build({
+        {
+            id = 1,
+            ast = P('"x" (?!"a") [a-z]'),
+        },
+    }, {}, nil, preds))
+    -- the dispatch state after "x" does not fit, then one of its targets
+    for _, max in ipairs({
+        1,
+        2,
+    }) do
+        local d, err = dfa.build(machine, {
+            1,
+        }, {
+            max_states = max,
+        })
+        assert.is_nil(d)
+        assert.equal(err.code, 'automaton_too_large')
+    end
+end
+
+function testcase.longest_evaluates_lookaheads_after_the_token()
+    -- the longest length at which the lookahead holds: in 12a, the 1 is
+    -- followed by 2, which is no letter
+    local d, _, machines = build_lookahead({
+        {
+            id = 1,
+            ast = P('[0-9]+ (?![a-z])'),
+        },
+    })
+    local strict, _, strict_machines = build_lookahead({
+        {
+            id = 1,
+            ast = P('[0-9]+ (?![0-9a-z])'),
+        },
+    })
+    for _, case in ipairs({
+        {
+            d,
+            machines,
+            '12 a',
+            1,
+            3,
+        },
+        {
+            d,
+            machines,
+            '12a',
+            1,
+            2,
+        },
+        {
+            d,
+            machines,
+            '1',
+            1,
+            2,
+        },
+        {
+            strict,
+            strict_machines,
+            '12a',
+        },
+        {
+            strict,
+            strict_machines,
+            '12 a',
+            1,
+            3,
+        },
+    }) do
+        local str = case[3]
+        local id, stop =
+            dfa.longest(case[1], str, 1, valuation_of(case[2], str))
+        assert.equal({
+            str,
+            id,
+            stop,
+        }, {
+            str,
+            case[4],
+            case[5],
+        })
+    end
+end
+
 function testcase.build_returns_minimal_state_counts()
     -- the dead state is not counted
     assert.equal(build1('"a"* "b"').nstates, 2)

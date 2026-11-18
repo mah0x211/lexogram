@@ -45,6 +45,7 @@ function testcase.build_returns_plain_machine()
                 2,
             },
         },
+        geps = {},
         edges = {
             [2] = {
                 {
@@ -489,6 +490,186 @@ function testcase.build_raises_for_invalid_limits()
 end
 
 -- find_cycles
+
+-- lookaheads
+
+-- build a machine of src (id 1) with its predicates; returns the machine
+-- and the machines of the predicates
+local function build_with_predicates(src, fragments)
+    local preds = nfa.new_predicates()
+    local machine = assert(nfa.build({
+        {
+            id = 1,
+            ast = P(src),
+        },
+    }, fragments or {}, nil, preds))
+    local machines = {}
+    local id = 1
+    while preds.list[id] do
+        machines[id] = assert(nfa.build_predicate(id, preds, fragments or {}))
+        id = id + 1
+    end
+    return machine, machines, preds
+end
+
+function testcase.build_compiles_lookaheads_to_guarded_edges()
+    local machine, machines, preds = build_with_predicates(
+                                         '"x" (?!("ab" | "ac")) [a-z]+')
+    assert.equal(#preds.list, 1)
+    local guarded = {}
+    for _, list in pairs(machine.geps) do
+        for _, g in ipairs(list) do
+            guarded[#guarded + 1] = {
+                g[2],
+                g[3],
+            }
+        end
+    end
+    assert.equal(guarded, {
+        {
+            1,
+            false,
+        },
+    })
+    -- the predicate fails when any path of its body succeeds
+    for _, case in ipairs({
+        {
+            'xab',
+            {},
+        },
+        {
+            'xac',
+            {},
+        },
+        {
+            'xad',
+            {
+                1,
+            },
+        },
+        {
+            'xa',
+            {
+                1,
+            },
+        },
+    }) do
+        assert.equal({
+            case[1],
+            nfa.accepts(machine, case[1], machines),
+        }, {
+            case[1],
+            case[2],
+        })
+    end
+end
+
+function testcase.lookaheads_see_the_input_after_them()
+    -- positive, nested, and of unbounded length; the input ends after the
+    -- string, so a lookahead at its end sees the end of input
+    for _, case in ipairs({
+        {
+            '"x" (?="a") [a-z]',
+            {
+                'xa',
+            },
+            {
+                'xb',
+            },
+        },
+        {
+            '"x" (?="a" (?!"b")) [a-z]+',
+            {
+                'xac',
+                'xa',
+            },
+            {
+                'xab',
+            },
+        },
+        {
+            '"a" (?="a"* "b") [ab]*',
+            {
+                'aaab',
+                'ab',
+            },
+            {
+                'aaa',
+                'a',
+            },
+        },
+        {
+            '"a" (?!"b")',
+            {
+                'a',
+            },
+            {},
+        },
+        {
+            '"a" (?="b")',
+            {},
+            {
+                'a',
+            },
+        },
+    }) do
+        local machine, machines = build_with_predicates(case[1])
+        for _, str in ipairs(case[2]) do
+            assert.equal({
+                str,
+                nfa.accepts(machine, str, machines),
+            }, {
+                str,
+                {
+                    1,
+                },
+            })
+        end
+        for _, str in ipairs(case[3]) do
+            assert.equal({
+                str,
+                nfa.accepts(machine, str, machines),
+            }, {
+                str,
+                {},
+            })
+        end
+    end
+end
+
+function testcase.build_registers_lookaheads_in_fragments_once()
+    local fragments = {
+        _end = P('(?![a-z])'),
+    }
+    local preds = nfa.new_predicates()
+    assert(nfa.build({
+        {
+            id = 1,
+            ast = P('"a" _end'),
+        },
+        {
+            id = 2,
+            ast = P('"b" _end'),
+        },
+    }, fragments, nil, preds))
+    assert.equal(#preds.list, 1)
+    -- the simulator needs the machines of the predicates
+    local machine = assert(nfa.build({
+        {
+            id = 1,
+            ast = P('"a" (?="b")'),
+        },
+    }, {}, nil, nfa.new_predicates()))
+    assert.match(select(2, pcall(nfa.accepts, machine, 'a')),
+                 'no machine for predicate 1', true)
+    -- a lookahead needs a registry
+    assert.match(select(2, pcall(nfa.build, {
+        {
+            id = 1,
+            ast = P('(?="a")'),
+        },
+    }, {})), 'lookahead without a predicate registry', true)
+end
 
 function testcase.find_cycles_returns_empty_list_without_cycles()
     assert.equal(nfa.find_cycles({}), {})

@@ -314,6 +314,7 @@ choice   = sequence ("|" sequence)* | sequence ("/" sequence)*
 sequence = repeat+
 repeat   = primary (("?" | "*" | "+") "+"?)?
 primary  = literal | class | name | "(" choice ")"
+         | "(?=" choice ")" | "(?!" choice ")"
 ```
 
 | Notation | Meaning | In `tokens` | In `rules` |
@@ -327,6 +328,7 @@ primary  = literal | class | name | "(" choice ")"
 | `A?`, `A*`, `A+` | Optional, zero or more, one or more | yes | yes |
 | `A?+`, `A*+`, `A++` | The same, possessive: the greedy choice is intended where it is ambiguous (see [How rules are applied](#how-rules-are-applied)) | no | yes |
 | `(A)` | Grouping | yes | yes |
+| `(?=A)`, `(?!A)` | Lookahead, positive and negative: consumes nothing (see [Lookaheads](#lookaheads)) | yes | no |
 
 - Postfix operators bind tighter than sequences (the `+` of a possessive operator follows the operator directly, without white space), and sequences tighter than choices. `|` and `/` cannot be mixed in one choice; group one of them with parentheses.
 - White space outside quotes and brackets is ignored. Patterns are written in Lua long brackets (`[[ ... ]]`), where the escapes of Lua do not apply; a pattern that contains `]]` is written in `[=[ ... ]=]`.
@@ -344,17 +346,31 @@ primary  = literal | class | name | "(" choice ")"
 | `HEXDIGIT` | `[0-9A-Fa-f]` |
 | `ANY` | Any one byte |
 
+### Lookaheads
+
+`(?= p )` holds where the input from that position starts with a string of `p`, and `(?! p )` where it starts with none; they consume nothing, as in regular expressions. The input they see goes on after the token. A number that must not touch a letter, a dot or another digit:
+
+```lua
+number = [[ DIGIT+ ("." DIGIT+)? (?![0-9A-Za-z_.]) ]],
+```
+
+- `p` can be any pattern: choices, repetitions, fragments and nested lookaheads, of any length. Fragments still cannot be recursive, so a lookahead keeps the patterns regular.
+- Lookaheads are allowed in pattern tokens, fragments and leading tokens. In a delimited token table (`open`, `close`, `prefix`, a capture, also through a fragment) and in `rules` they are errors (`lookahead_not_allowed`); a repeated lookahead (`(?=A)*`) is `invalid_lookahead`.
+- A token is chosen by longest match, as below: at each length its lookaheads are evaluated, and the longest length at which the whole pattern holds is the match. In `[0-9]+ (?![a-z])`, the input `12a` gives the token `1`, which is followed by `2`, not a letter; write `(?![0-9a-z])` for "the whole run of digits, not followed by a letter".
+- Two pattern tokens conflict when they can match the same string at the same position with both lookaheads holding on the same input. A token cannot be preferred over another, so tokens that differ by a lookahead are written with complementary conditions (`(?=p)` and `(?!p)`).
+- Cost: a lookahead whose result is known after a bounded number of bytes is evaluated where needed; one without a bound (such as `(?="a"* "b")`) is computed for every position of the input once, from its end. `lexogram.parse` does this once per call; for repeated calls of `lexogram.tokenize` on one input, make an input of it once with `lexogram.input(source)` and pass that instead of the string (`tokenize(compiled, input, pos)`): the input holds the source with the values computed for it. Given a string, a lookahead without a bound is evaluated where it is needed, which may read up to the end of the input.
+
 ## How tokens are chosen
 
 At a position of the source, the token is chosen in this order:
 
 1. At position 1 only, the longest match of the leading tokens, if any.
 2. The delimited token whose open matches; of several, the longest open.
-3. The longest match of the pattern tokens and the literals.
+3. The longest match of the pattern tokens and the literals (a pattern with lookaheads matches at a length only where they hold there).
 4. Of a pattern token and a literal of the same length, the literal.
 5. A byte that starts no token is an `INVALID` token of one byte.
 
-Two pattern tokens (or two leading tokens) that can match the same whole string are an error, and so are two opens of delimited tokens; the diagnostic shows the shortest such string. A pattern token that never wins, because a literal or a longer token always takes its strings, is warned about (`never_adopted`).
+Two pattern tokens (or two leading tokens) that can match the same whole string are an error (with lookaheads, only when both can hold on the same input), and so are two opens of delimited tokens; the diagnostic shows the shortest such string. A pattern token that never wins, because a literal or a longer token always takes its strings, is warned about (`never_adopted`).
 
 ## How rules are applied
 
@@ -385,7 +401,7 @@ The compilation also rejects a repetition of an element that can match nothing (
 | Kind | Codes |
 |---|---|
 | Structure | `invalid_type`, `missing_field`, `unknown_field`, `invalid_key`, `invalid_value`, `invalid_version`, `version_too_new`, `version_too_old`, `empty_item`, `duplicate_item`, `reserved_item`, `invalid_name`, `reserved_name`, `duplicate_name`, `undefined_reference`, `invalid_reference`, `undeclared_literal` |
-| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
+| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `lookahead_not_allowed`, `invalid_lookahead`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
 | Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `automaton_too_large` |
 | Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice`, `ambiguous_repetition` |
 | Warnings | `never_adopted`, `unneeded_possessive`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
