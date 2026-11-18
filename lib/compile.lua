@@ -80,6 +80,11 @@
 --     leading            an automaton of the same shape over the leading
 --                        tokens (listed in leading), which the automaton
 --                        above does not have; absent without them
+--     checks             map from the kind id of a pattern token written
+--                        as an array of patterns to the array of the
+--                        automata of its patterns after the first (same
+--                        shape; their dispatch states use the predicates
+--                        above); absent without such tokens
 --     open               an automaton of the same shape over the opens of
 --                        the delimited tokens; accept holds indexes into
 --                        delimited
@@ -115,7 +120,12 @@
 -- INVALID. In an automaton with dispatch states, a dispatch state reached
 -- at a position (the start state at the start position, or the state after
 -- a byte at the position after it) is replaced by its target for the
--- values of its predicates at that position before anything else.
+-- values of its predicates at that position before anything else. A
+-- pattern token with checks is then matched by each of them in order: the
+-- automaton, run from state 1 over the whole text of the token (a
+-- predicate sees only that text: its end is the end of the input), must
+-- end in a state with accept ~= 0; the token is invalid at the first check
+-- that it fails.
 --
 --   syntax    the rules as instructions (see lexogram.compile.codegen for
 --             the instruction set and the shape of each construct):
@@ -282,6 +292,16 @@ local function build_object(grammar, lexer, syntax)
     automata.open = automaton(lexer.delimited.open)
     automata.delimited = delimited_entries(lexer.delimited.entries)
     automata.predicates = predicate_automata(lexer.predicates)
+    if lexer.checks then
+        automata.checks = {}
+        for id, list in next, lexer.checks do
+            local out = {}
+            for i, d in ipairs(list) do
+                out[i] = automaton(d)
+            end
+            automata.checks[id] = out
+        end
+    end
     return {
         lexogram = resolve_version(rawget(grammar, 'lexogram')),
         name = rawget(grammar, 'name'),

@@ -48,6 +48,7 @@ local text = require('lexogram.text')
 local escape_key = text.escape
 local quote = text.quote
 local build_lexer = require('lexogram.compile.lexer').build
+local is_staged = require('lexogram.compile.lexer').is_staged
 local DELIMITED_SETTINGS = require('lexogram.compile.delimited').SETTINGS
 local is_prefixed = require('lexogram.compile.delimited').is_prefixed
 local analyze_syntax = require('lexogram.compile.syntax').analyze
@@ -418,8 +419,9 @@ local function check_delimited(ctx, segments, tbl)
     end
 end
 
--- defined after the array checks it uses
+-- defined after the array checks they use
 local check_prefixed
+local check_staged
 
 --- check_tokens checks the tokens table.
 --- @param ctx table
@@ -431,6 +433,8 @@ local function check_tokens(ctx, segments, tbl)
         local t = type(v)
         if type(k) ~= 'string' then
             string_key_required(ctx, segs)
+        elseif is_staged(v) then
+            check_staged(ctx, segs, v)
         elseif t == 'table' and is_prefixed(v) then
             check_prefixed(ctx, segs, v)
         elseif t == 'table' then
@@ -632,6 +636,31 @@ function check_prefixed(ctx, segments, tbl)
                           label(segs) .. ' must have at least one item')
             end
             check_items(ctx, segs, v, n, false)
+        end
+    end
+end
+
+--- reject_stage_field reports a string key in a token written as an array
+--- of patterns.
+--- @param ctx table
+--- @param segments any[]
+local function reject_stage_field(ctx, segments)
+    add_error(ctx, 'unknown_field', segments,
+              'unknown field ' .. label(segments) ..
+                  ' (a token written as an array of patterns has no fields)')
+end
+
+--- check_staged checks a pattern token written as an array of patterns:
+--- every item is a pattern string, and there is no other key.
+--- @param ctx table
+--- @param segments any[]
+--- @param tbl table
+function check_staged(ctx, segments, tbl)
+    local n = scan_array_keys(ctx, segments, tbl, reject_stage_field)
+    for i = 1, n do
+        local v = rawget(tbl, i)
+        if v ~= nil then
+            expect_type(ctx, child(segments, i), v, 'string')
         end
     end
 end
@@ -862,16 +891,19 @@ local function collect_tokens(ctx, tokens, kinds)
             check_name_shape(ctx, segs, k)
             local kind = byte(k, 1) == UNDERSCORE and 'fragment' or 'token'
             if kind == 'fragment' and type(v) == 'table' then
-                -- a delimited token table is never a fragment; it is
-                -- registered as a token so that a reference to it from a
-                -- token pattern is reported as not a fragment
+                -- a table is never a fragment; it is registered as a token
+                -- so that a reference to it from a token pattern is
+                -- reported as not a fragment
+                local what = is_staged(v) and
+                                 'a token written as an array of patterns' or
+                                 'a delimited token table'
                 add_error(ctx, 'invalid_name', segs,
-                          label(segs) .. ': a delimited token table cannot be a' ..
+                          label(segs) .. ': ' .. what .. ' cannot be a' ..
                               ' fragment (its name must not start with "_")')
                 kind = 'token'
             end
             define(kinds, k, kind)
-            if type(v) == 'table' and not is_prefixed(v) then
+            if type(v) == 'table' and not is_staged(v) and not is_prefixed(v) then
                 check_captures(ctx, segs, v)
             end
         end
@@ -979,7 +1011,8 @@ local function check_match_references(ctx, tokens)
                                   label(segs) ..
                                       ' refers to undefined delimited token ' ..
                                       quote(name))
-                    elseif type(target) ~= 'table' or is_prefixed(target) then
+                    elseif type(target) ~= 'table' or is_staged(target) or
+                        is_prefixed(target) then
                         add_error(ctx, 'invalid_reference', segs,
                                   label(segs) .. ' refers to ' .. quote(name) ..
                                       ', which is not a delimited token' ..
@@ -1004,7 +1037,8 @@ local function check_leading_references(ctx, tokens)
     local segments = child(ROOT, 'leading')
     for i = 1, array_length(list) do
         local name = rawget(list, i)
-        if type(name) == 'string' and type(rawget(tokens, name)) == 'table' then
+        local v = type(name) == 'string' and rawget(tokens, name)
+        if type(v) == 'table' and not is_staged(v) then
             local segs = child(segments, i)
             add_error(ctx, 'invalid_reference', segs,
                       label(segs) .. ' refers to ' .. quote(name) ..
@@ -1139,6 +1173,13 @@ local function parse_all(ctx, tokens, rules)
             local segs = child(ctx.tokens_segments, k)
             if type(v) == 'string' then
                 parse_at(ctx, segs, v, 'tokens')
+            elseif is_staged(v) then
+                for i = 1, array_length(v) do
+                    local item = rawget(v, i)
+                    if type(item) == 'string' then
+                        parse_at(ctx, child(segs, i), item, 'tokens')
+                    end
+                end
             elseif type(v) == 'table' and is_prefixed(v) then
                 local prefix = rawget(v, 'prefix')
                 if type(prefix) == 'string' then

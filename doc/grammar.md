@@ -79,7 +79,7 @@ return assert(require('lexogram.grammar')({
 | `name` | yes | string | The name of the grammar |
 | `version` | yes | string | The version of the grammar itself |
 | `start` | yes | rule name | The rule that must cover the whole input |
-| `tokens` | yes | table | Name → pattern, delimited token table or prefixed table |
+| `tokens` | yes | table | Name → pattern, array of patterns, delimited token table or prefixed table |
 | `symbols` | | array of literals | Punctuation |
 | `keywords` | | array of literals | Reserved words |
 | `skip` | | array of token names | Tokens skipped between the elements of the rules |
@@ -108,7 +108,7 @@ The rule that the analysis starts with. It must name a rule, and the input must 
 
 ## tokens
 
-The tokens of the language, as a table from names to definitions. A definition is one of three forms: a pattern string, a delimited token table, or a prefixed table. A name that starts with `_` is a fragment: a pattern that other token patterns refer to, which is not a token by itself.
+The tokens of the language, as a table from names to definitions. A definition is one of four forms: a pattern string, an array of patterns, a delimited token table, or a prefixed table. A name that starts with `_` is a fragment: a pattern that other token patterns refer to, which is not a token by itself; a fragment is a pattern string.
 
 ### Pattern tokens
 
@@ -123,6 +123,28 @@ tokens = {
 ```
 
 A pattern token that matches the empty string is an error, and so is a pair of pattern tokens that can match the same whole string (see [How tokens are chosen](#how-tokens-are-chosen)).
+
+#### Arrays of patterns
+
+A pattern token can be written as an array of patterns, checked in stages. The first pattern chooses the token, as a pattern string does: it gives its kind and its end. Each later pattern checks the token afterwards: it must match the whole text of the token, and a token that fails one is invalid. A form that is simple to tell apart can so be chosen by a small pattern, and its exact rules checked by others, without one large automaton for all of them:
+
+```lua
+tokens = {
+    -- a run of digits and "_", not followed by a letter; at most three
+    -- digits after the leading zeros
+    number = {
+        [[ DIGIT (DIGIT | "_")* (?![0-9A-Za-z_]) ]],
+        [[ ("0" "_"*)* ([1-9] "_"* (DIGIT "_"*){0,2})? ]],
+    },
+}
+```
+
+- The array has at least one item, each a pattern string, and no other key. An array of one pattern is that pattern. A table with `open`, `close`, `nest`, `prefix` or `match` is a delimited token table or a prefixed table, not an array.
+- The later patterns are tried in order, and all of them must match: a token fails at the first that does not. They may use fragments and lookaheads; a lookahead in a later pattern sees only the text of the token, whose end is the end of its input.
+- An invalid token keeps its kind and its end. `lexogram.tokenize` returns `kind, stop, 'invalid', i`, where `i` is the index in the array of the pattern that failed; `lexogram.parse` stops with the error `invalid_token` at the start of the token (`invalid number`). This holds for skipped and leading tokens as well.
+- Conflicts between tokens are checked with the first patterns. A later pattern that matches no non-empty string is an error (`unmatchable_pattern`); whether the first pattern and the later ones have a string in common is not checked.
+- Each later pattern is an automaton of its own, run only on the tokens of its kind: a condition that needs the product of two automata when written in one pattern (as a lookahead that holds over the whole token) costs no more than the two.
+- In a grammar that extends another, the marks work on the array as on any array: `['+number'] = { [[ ... ]] }` appends a check, `['-number'] = { [[ ... ]] }` removes one, and `['=number']` replaces the definition. A pattern string is not an array: to add a check to it, replace the token.
 
 ### Delimited token tables
 
@@ -382,7 +404,7 @@ number = [[ DIGIT+ ("." DIGIT+)? (?![0-9A-Za-z_.]) ]],
 ```
 
 - `p` can be any pattern: choices, repetitions, fragments and nested lookaheads, of any length. Fragments still cannot be recursive, so a lookahead keeps the patterns regular.
-- Lookaheads are allowed in pattern tokens, fragments and leading tokens. In a delimited token table (`open`, `close`, `prefix`, a capture, also through a fragment) and in `rules` they are errors (`lookahead_not_allowed`); a repeated lookahead (`(?=A)*`) is `invalid_lookahead`.
+- Lookaheads are allowed in pattern tokens (in each pattern of an [array](#arrays-of-patterns)), fragments and leading tokens. In a delimited token table (`open`, `close`, `prefix`, a capture, also through a fragment) and in `rules` they are errors (`lookahead_not_allowed`); a repeated lookahead (`(?=A)*`) is `invalid_lookahead`.
 - A token is chosen by longest match, as below: at each length its lookaheads are evaluated, and the longest length at which the whole pattern holds is the match. In `[0-9]+ (?![a-z])`, the input `12a` gives the token `1`, which is followed by `2`, not a letter; write `(?![0-9a-z])` for "the whole run of digits, not followed by a letter".
 - Two pattern tokens conflict when they can match the same string at the same position with both lookaheads holding on the same input. A token cannot be preferred over another, so tokens that differ by a lookahead are written with complementary conditions (`(?=p)` and `(?!p)`).
 - Cost: a lookahead whose result is known after a bounded number of bytes is evaluated where needed; one without a bound (such as `(?="a"* "b")`) is computed for every position of the input once, from its end. `lexogram.parse` does this once per call; for repeated calls of `lexogram.tokenize` on one input, make an input of it once with `lexogram.input(source)` and pass that instead of the string (`tokenize(compiled, input, pos)`): the input holds the source with the values computed for it. Given a string, a lookahead without a bound is evaluated where it is needed, which may read up to the end of the input.
@@ -397,6 +419,8 @@ At a position of the source, the token is chosen in this order:
 4. Of a pattern token and a literal of the same length, the literal.
 5. A byte that starts no token is an `INVALID` token of one byte.
 
+A pattern token written as an [array of patterns](#arrays-of-patterns) is chosen by its first pattern; the others then check its text.
+
 Two pattern tokens (or two leading tokens) that can match the same whole string are an error (with lookaheads, only when both can hold on the same input), and so are two opens of delimited tokens; the diagnostic shows the shortest such string. A pattern token that never wins, because a literal or a longer token always takes its strings, is warned about (`never_adopted`).
 
 ## How rules are applied
@@ -406,7 +430,7 @@ The analysis is deterministic and looks at most two tokens ahead (skipped tokens
 - **Choice `|`**: the alternatives must be told apart by the next two tokens; otherwise it is an error (`ambiguous_choice`). As long as they can be told apart, their order does not matter.
 - **Repetition `?`, `*`, `+`**: greedy, without backtracking. When the next tokens can start the element, the element is taken. Where two tokens of lookahead cannot tell whether to take the element or to go on, the repetition is ambiguous: that is an error (`ambiguous_repetition`), as for a choice, unless the repetition is written possessive (`?+`, `*+`, `++`), which declares that the greedy choice is intended. A possessive repetition parses the same way; one that is not ambiguous is warned about (`unneeded_possessive`). For example, in `name* name?` the `name?` can never match, which is likely a mistake and is reported; a grammar that means it writes `name*+ name?`.
 - **Ordered choice `/`** (rules only): the first alternative is tried; if a syntax error occurs inside it, the input and the events are rewound to its start and the next alternative is tried. Once an alternative succeeds it is kept, even if a later part fails. When the next token cannot start an alternative, it is not tried. The overlap of the alternatives is not checked: their order decides. Nested trials can cost much time; use them only where two tokens cannot decide.
-- **Syntax errors**: the analysis stops with `nil` and `{ code, pos, line, column, expected, actual, message }`.
+- **Syntax errors**: the analysis stops with `nil` and `{ code, pos, line, column, expected, actual, message }`. `code` is `syntax_error`, or for a token that cannot be read `unterminated_token`, `nested_delimiter` (see [Delimited token tables](#delimited-token-tables)) or `invalid_token` (see [Arrays of patterns](#arrays-of-patterns)).
 
 The compilation also rejects a repetition of an element that can match nothing (`nullable_repetition`), a rule that cannot derive a finite sequence of tokens (`nonterminating_rule`), and a rule that refers to a token in `skip` (`skipped_token`).
 
@@ -429,7 +453,7 @@ The compilation also rejects a repetition of an element that can match nothing (
 |---|---|
 | Structure | `invalid_type`, `missing_field`, `unknown_field`, `invalid_key`, `invalid_value`, `invalid_version`, `version_too_new`, `version_too_old`, `empty_item`, `duplicate_item`, `reserved_item`, `invalid_name`, `reserved_name`, `duplicate_name`, `undefined_reference`, `invalid_reference`, `undeclared_literal` |
 | Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `lookahead_not_allowed`, `invalid_lookahead`, `invalid_repetition`, `alias_not_allowed`, `invalid_alias`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
-| Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `invalid_contextual`, `automaton_too_large` |
+| Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `invalid_contextual`, `unmatchable_pattern`, `automaton_too_large` |
 | Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice`, `ambiguous_repetition` |
 | Warnings | `never_adopted`, `unneeded_possessive`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
 | Warnings of the merge | `already_defined` (a [mixin](#mixins) adds what exists; returned by `lexogram.load`, `lexogram.merge` and `lexogram.grammar`, with the mixin as `source`) |

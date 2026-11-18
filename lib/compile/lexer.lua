@@ -24,11 +24,13 @@
 -- diagnostics: fragment recursion, automata that are too large, tokens
 -- matching the empty string, conflicts between pattern tokens or between
 -- literals, and pattern tokens that never win. Delimited token tables are
--- checked and compiled with lexogram.compile.delimited. The grammar must
--- have passed the structure, names and
--- patterns passes of lexogram.check without errors; in particular every
--- fragment is a pattern string (the names pass rejects a delimited token
--- table named like a fragment), so every reference can be expanded.
+-- checked and compiled with lexogram.compile.delimited. A pattern token
+-- written as an array of patterns (stages) is in the automaton by its first
+-- pattern; each later one is an automaton of its own (a check), which the
+-- whole text of the token must match. The grammar must have passed the
+-- structure, names and patterns passes of lexogram.check without errors;
+-- in particular every fragment is a pattern string (the names pass rejects
+-- a table named like a fragment), so every reference can be expanded.
 local type = type
 local next = next
 local rawget = rawget
@@ -88,6 +90,32 @@ local function label(def)
     return segs[1] .. '[' .. segs[2] .. ']'
 end
 
+-- Keys of a delimited token table (with open and close, or prefixed).
+local DELIMITED_KEYS = {
+    'open',
+    'close',
+    'nest',
+    'prefix',
+    'match',
+}
+
+--- is_staged returns true if the value v of a token is an array of
+--- patterns (stages): a table with an item and none of the keys of a
+--- delimited token table, which is checked as such otherwise.
+--- @param v any
+--- @return boolean
+local function is_staged(v)
+    if type(v) ~= 'table' or rawget(v, 1) == nil then
+        return false
+    end
+    for _, key in ipairs(DELIMITED_KEYS) do
+        if rawget(v, key) ~= nil then
+            return false
+        end
+    end
+    return true
+end
+
 --- collect_tokens returns the sorted names of the pattern tokens, the
 --- parsed fragments and the sorted names of the delimited token tables.
 --- @param tokens table
@@ -97,7 +125,9 @@ end
 local function collect_tokens(tokens)
     local names, fragments, tables = {}, {}, {}
     for k, v in next, tokens do
-        if type(v) == 'table' then
+        if is_staged(v) then
+            names[#names + 1] = k
+        elseif type(v) == 'table' then
             tables[#tables + 1] = k
         elseif byte(k, 1) == UNDERSCORE then
             fragments[k] = parse(v, 'tokens')
@@ -141,7 +171,9 @@ end
 --- tokens sorted by name), the nfa definitions of the pattern tokens and
 --- literals, those of the leading tokens (pattern tokens listed in leading,
 --- which are tried at the start of input only), the ranks and the
---- fragments. A leading token has leading = true in its definition.
+--- fragments. A leading token has leading = true in its definition, and a
+--- token written as an array of patterns has checks, the ASTs of its
+--- patterns after the first.
 --- @param grammar table
 --- @return table[] defs
 --- @return table[] nfa_defs
@@ -162,17 +194,33 @@ local function collect_definitions(grammar)
     end
     for _, name in ipairs(names) do
         local id = #defs + 1
+        local v = rawget(tokens, name)
+        local first, checks = v, nil
+        if is_staged(v) then
+            first = rawget(v, 1)
+            checks = {}
+            local i = 2
+            while rawget(v, i) ~= nil do
+                checks[i - 1] = parse(rawget(v, i), 'tokens')
+                i = i + 1
+            end
+            -- an array of one pattern is that pattern
+            if i == 2 then
+                checks = nil
+            end
+        end
         defs[id] = {
             id = id,
             kind = 'token',
             name = name,
             segments = pair('tokens', name),
             leading = leading[name] or nil,
+            checks = checks,
         }
         local list = leading[name] and leading_defs or nfa_defs
         list[#list + 1] = {
             id = id,
-            ast = parse(rawget(tokens, name), 'tokens'),
+            ast = parse(first, 'tokens'),
         }
         rank[id] = TOKEN_RANK
     end
@@ -462,6 +510,117 @@ local function too_large(diagnostics, err)
     return nil, diagnostics
 end
 
+--- matches_nonempty returns true if the automaton d accepts in a state
+--- reached after at least one byte. The predicates of its dispatch states
+--- are not evaluated: every target counts.
+--- @param d table
+--- @return boolean
+local function matches_nonempty(d)
+    local nclasses, trans, accept = d.nclasses, d.trans, d.accept
+    local dispatch = d.dispatch or {}
+    local seen, stack = {}, {}
+    local function push(s)
+        if s ~= 0 and not seen[s] then
+            seen[s] = true
+            stack[#stack + 1] = s
+        end
+    end
+    local function targets(s)
+        return dispatch[s] and dispatch[s].targets or {}
+    end
+    -- the states of the start position (through dispatch targets), then
+    -- those after one byte
+    local starts, queue, found = {}, {}, {}
+    queue[1] = 1
+    while #queue > 0 do
+        local s = queue[#queue]
+        queue[#queue] = nil
+        if s ~= 0 and not found[s] then
+            found[s] = true
+            starts[#starts + 1] = s
+            for _, t in ipairs(targets(s)) do
+                queue[#queue + 1] = t
+            end
+        end
+    end
+    for _, s in ipairs(starts) do
+        for c = 1, nclasses do
+            push(trans[(s - 1) * nclasses + c])
+        end
+    end
+    while #stack > 0 do
+        local s = stack[#stack]
+        stack[#stack] = nil
+        if accept[s] ~= 0 then
+            return true
+        end
+        for _, t in ipairs(targets(s)) do
+            push(t)
+        end
+        for c = 1, nclasses do
+            push(trans[(s - 1) * nclasses + c])
+        end
+    end
+    return false
+end
+
+--- build_checks builds an automaton for each check of the pattern tokens
+--- (the patterns after the first of a token written as an array) and
+--- returns them by kind id, or nil when there is none. A check that
+--- accepts no non-empty string is unmatchable_pattern. It returns nil and
+--- an automaton_too_large error when an automaton exceeds its limit.
+--- @param defs table[]
+--- @param fragments table
+--- @param preds table predicates shared with the token automaton
+--- @param limits table { nfa, dfa }
+--- @param diagnostics table[]
+--- @return table? checks kind id -> automata
+--- @return table? err
+local function build_checks(defs, fragments, preds, limits, diagnostics)
+    local checks
+    for _, def in ipairs(defs) do
+        if def.checks then
+            local list = {}
+            for i, ast in ipairs(def.checks) do
+                local machine, err = nfa.build({
+                    {
+                        id = def.id,
+                        ast = ast,
+                    },
+                }, fragments, limits.nfa, preds)
+                if not machine then
+                    return nil, err
+                end
+                local d
+                d, err = dfa.build(machine, {
+                    [def.id] = TOKEN_RANK,
+                }, limits.dfa)
+                if not d then
+                    return nil, err
+                end
+                if not matches_nonempty(d) then
+                    local index = i + 1
+                    local segments = {
+                        'tokens',
+                        def.name,
+                        index,
+                    }
+                    local message = label(def) .. '[' .. index .. ']' ..
+                                        ' matches no non-empty string, so' ..
+                                        ' every token of ' .. label(def) ..
+                                        ' fails it'
+                    add_error(diagnostics, 'unmatchable_pattern', segments,
+                              message)
+                end
+                list[i] = d
+            end
+            checks = checks or {}
+            checks[def.id] = list
+        end
+    end
+    return checks
+end
+
 --- build_delimited checks and compiles the delimited token tables. It
 --- returns { open, tokens, entries }, or nil and an automaton_too_large
 --- error. tokens maps the kind id of each table with open and close to its
@@ -546,10 +705,12 @@ end
 --- largest number of states of every non-deterministic automaton (passed
 --- to nfa.build) and of every deterministic automaton (passed to dfa.build)
 --- built for the grammar; each defaults to the builder's MAX_STATES
---- @return table? result { defs, dfa, leading, delimited, predicates }, nil
---- when there is an error; leading is the automaton of the leading tokens
---- (nil without them), predicates the automata of the predicates of the
---- lookaheads (see lexogram.compile.lookahead; nil without them)
+--- @return table? result { defs, dfa, leading, delimited, predicates,
+--- checks }, nil when there is an error; leading is the automaton of the
+--- leading tokens (nil without them), predicates the automata of the
+--- predicates of the lookaheads (see lexogram.compile.lookahead; nil
+--- without them), checks the automata of the checks by kind id (nil
+--- without them)
 --- @return table[] diagnostics { severity, code, segments, pos, message }
 local function build(grammar, limits)
     -- read here, so that an invalid limit raises at the caller of build
@@ -600,6 +761,13 @@ local function build(grammar, limits)
 
     resolve_contextual(diagnostics, defs, d, rawget(grammar, 'skip'))
 
+    -- before the predicates, which the checks may add to
+    local checks
+    checks, err = build_checks(defs, fragments, preds, limits, diagnostics)
+    if err then
+        return too_large(diagnostics, err)
+    end
+
     local predicates
     if #preds.list > 0 then
         predicates, err = lookahead.build(preds, fragments, limits)
@@ -631,9 +799,11 @@ local function build(grammar, limits)
         leading = leading,
         delimited = compiled,
         predicates = predicates,
+        checks = checks,
     }, diagnostics
 end
 
 return {
+    is_staged = is_staged,
     build = build,
 }

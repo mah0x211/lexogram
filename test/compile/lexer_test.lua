@@ -268,6 +268,40 @@ function testcase.build_reports_lookahead_automata_too_large()
     })
 end
 
+function testcase.build_reports_check_automata_too_large()
+    -- the DFA of a check; the token automaton is small
+    local result, diagnostics = lexer.build(grammar({
+        t = {
+            '[ab]+',
+            '("a" | "b")* "a"' .. string.rep(' ("a" | "b")', 4),
+        },
+    }), {
+        dfa_states = 8,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the deterministic automaton would have more than 8 states'),
+    })
+
+    -- the NFA of a check
+    result, diagnostics = lexer.build(grammar({
+        t = {
+            '[a-h]+',
+            '"abcdefgh"',
+        },
+    }), {
+        nfa_states = 5,
+    })
+    assert.is_nil(result)
+    assert.equal(diagnostics, {
+        err('automaton_too_large', {
+            'tokens',
+        }, 'the automaton would have more than 5 states'),
+    })
+end
+
 function testcase.build_raises_for_invalid_limits()
     local g = grammar({
         t = '"t"',
