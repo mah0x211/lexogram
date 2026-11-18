@@ -39,9 +39,16 @@
 --               2 = { name = 'ERROR', category = 'error' }: an error span
 --               then pattern tokens (by name), symbols and keywords (by
 --               index), delimited tokens (by name) and the rules whose
---               names do not start with "_" (by name). category is
+--               names do not start with "_" (by name); the contextual
+--               keywords follow the keywords (by index). category is
 --               'token' (also for delimited tokens), 'symbol', 'keyword',
 --               'rule' or 'error'; skip is true for tokens listed in skip.
+--               A contextual keyword (category 'keyword') also has base,
+--               the kind id of the pattern token that its text is read as
+--               (the parser takes a token of that kind with that text as
+--               the keyword where its rules expect the keyword), and
+--               ignore_case = true when its text is compared after ASCII
+--               folding.
 --   names     map from token names, rule names (rules with a kind) and the
 --             reserved names to kind ids
 --   literals  map from literal strings (as declared) to kind ids
@@ -135,6 +142,7 @@ local CATEGORY = {
     delimited = 'token',
     symbol = 'symbol',
     keyword = 'keyword',
+    contextual = 'keyword',
 }
 
 --- copy_array returns a copy of the array t of plain values.
@@ -250,6 +258,8 @@ local function build_object(grammar, lexer, syntax)
             name = def.name,
             category = category,
             skip = skipped[def.name] == true and category == 'token',
+            base = def.base,
+            ignore_case = def.base and def.ignore_case or nil,
         }
         if category == 'symbol' or category == 'keyword' then
             literals[def.name] = def.id

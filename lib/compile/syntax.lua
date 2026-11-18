@@ -108,23 +108,30 @@ end
 --- new_terminal returns the terminal function for ll.analyze: the kind id
 --- of a literal (exact match first, otherwise an ignore_case item equal
 --- after ASCII folding) or of a token ref, nil for a rule ref. It also
---- returns the kind names for messages.
+--- returns the kind names for messages and the aliases for ll.analyze: a
+--- pattern token that a contextual keyword is read as matches the keyword.
 --- @param grammar table
 --- @param defs table[] lexer definitions
 --- @return function terminal
 --- @return table names kind id -> printable name
+--- @return table aliases kind id -> kind ids
 local function new_terminal(grammar, defs)
-    local tokens, exact, folded, names = {}, {}, {}, {}
+    local tokens, exact, folded, names, aliases = {}, {}, {}, {}, {}
     for _, def in ipairs(defs) do
         local kind = def.kind
         if kind == 'token' or kind == 'delimited' then
             tokens[def.name] = def.id
             names[def.id] = def.name
-        elseif kind == 'symbol' or kind == 'keyword' then
+        elseif kind == 'symbol' or kind == 'keyword' or kind == 'contextual' then
             exact[def.name] = def.id
             names[def.id] = quote(def.name)
             if rawget(rawget(grammar, def.segments[1]), 'ignore_case') == true then
                 folded[fold(def.name)] = def.id
+            end
+            if kind == 'contextual' then
+                local list = aliases[def.base] or {}
+                list[#list + 1] = def.id
+                aliases[def.base] = list
             end
         end
     end
@@ -134,7 +141,7 @@ local function new_terminal(grammar, defs)
             return exact[node.value] or folded[fold(node.value)]
         end
         return tokens[node.name]
-    end, names
+    end, names, aliases
 end
 
 --- render returns a k = 2 key (see lexogram.compile.ll) as kind names.
@@ -562,7 +569,7 @@ end
 --- @return table[] diagnostics { severity, code, segments, pos, message }
 local function analyze(grammar, lexer_result)
     local names, rules = parse_rules(grammar)
-    local terminal, names_of = new_terminal(grammar, lexer_result.defs)
+    local terminal, names_of, aliases = new_terminal(grammar, lexer_result.defs)
     local ctx = {
         grammar = grammar,
         names = names,
@@ -573,7 +580,8 @@ local function analyze(grammar, lexer_result)
         unneeded = {},
     }
     check_skipped(ctx)
-    ctx.analysis = ll.analyze(rules, rawget(grammar, 'start'), terminal)
+    ctx.analysis =
+        ll.analyze(rules, rawget(grammar, 'start'), terminal, aliases)
     if check_termination(ctx) then
         return nil, ctx.diagnostics
     end

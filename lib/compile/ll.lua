@@ -25,7 +25,10 @@
 --
 -- Terminals are kind ids (positive integers); 0 is the end of input. The
 -- caller's terminal(node) maps a literal node, or a ref node naming a token,
--- to its kind id, and returns nil for a ref naming a rule.
+-- to its kind id, and returns nil for a ref naming a rule. A kind may have
+-- aliases (aliases[id] = { id2, ... }): kinds of the tokens that it also
+-- matches, so that its sets have them too (a contextual keyword is a token
+-- of its base kind with a given text: a ref to the base kind matches it).
 --
 -- Sets of terminal strings of length <= k are tables whose keys are
 -- encoded strings (key -> true):
@@ -203,9 +206,16 @@ local function combine(a, node, res, k, sets)
     if t == 'literal' or t == 'ref' then
         local id = a.terminal(node)
         if id then
-            return {
+            local out = {
                 [single(id, k)] = true,
             }
+            local extra = a.aliases[id]
+            if extra then
+                for _, x in ipairs(extra) do
+                    out[single(x, k)] = true
+                end
+            end
+            return out
         end
         -- a rule: its current FIRST_k (a copy, since sets grow)
         local copy = {}
@@ -462,6 +472,7 @@ end
 --- @param start string the start rule
 --- @param terminal function(node) kind id of a literal or token ref, nil
 --- for a rule ref
+--- @param aliases table? kind id -> array of the kind ids it also matches
 --- @return table analysis {
 ---   nullable  = rule -> boolean,
 ---   first1, follow1 = rule -> sorted kind ids (follow1 may contain 0),
@@ -469,7 +480,7 @@ end
 ---   left_recursion = array of cycles (arrays of rule names),
 ---   first_sets, follow_sets = k -> rule -> key set (with EPS), used by
 ---   first and walk }
-local function analyze(rules, start, terminal)
+local function analyze(rules, start, terminal, aliases)
     local names = {}
     for name in next, rules do
         names[#names + 1] = name
@@ -480,6 +491,7 @@ local function analyze(rules, start, terminal)
         rules = rules,
         start = start,
         terminal = terminal,
+        aliases = aliases or {},
         names = names,
         first_sets = {},
         follow_sets = {},

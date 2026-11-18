@@ -179,8 +179,27 @@ keywords = { 'if', 'then', 'end', ignore_case = true },
 ```
 
 - An empty item, an item twice in one array, and an item in both arrays are errors.
-- The only setting of the hash part is `ignore_case`: when true, ASCII letters match in either case.
+- The settings of the hash part are `ignore_case` (when true, ASCII letters match in either case) and, in `keywords` only, `contextual` (see below).
 - A table as an item is reserved for a later revision.
+
+### Contextual keywords
+
+`keywords.contextual` lists keywords that are not reserved: words that are keywords only where the rules expect them, and names elsewhere, such as `global` of Lua 5.5.
+
+```lua
+keywords = { 'local', 'function', contextual = { 'global' } },
+rules = {
+    -- the declaration is tried first; global = 1 is an assignment
+    stat = [[ globalstat / exprstat ]],
+    globalstat = [[ "global" name ]],
+    ...
+},
+```
+
+- A contextual keyword is not a token of its own: its text is read as the pattern token that matches it (here `name`), which must be exactly one pattern token, not listed in `skip` (`invalid_contextual`). `lexogram.tokenize` returns that token.
+- In rules, `"global"` matches a token of that kind whose text is `global` (after ASCII folding with `ignore_case`), and `name` matches it too. The token has the kind of the keyword in the events where the rules matched the keyword, and the kind `name` elsewhere.
+- No rule makes the keyword win: an alternative that starts with `"global"` and one that starts with `name` are ambiguous unless two tokens tell them apart (`ambiguous_choice`). Write an [ordered choice](#how-rules-are-applied) `/` to try the keyword first; it is tried only when the next token is the keyword.
+- An item that is also an item of `keywords` or `symbols` is an error (`duplicate_item`). Its kind follows those of the keywords in the compiled object, with the category `keyword` and `base` (the kind of the token it is read as).
 
 ## skip
 
@@ -402,7 +421,7 @@ The compilation also rejects a repetition of an element that can match nothing (
 |---|---|
 | Structure | `invalid_type`, `missing_field`, `unknown_field`, `invalid_key`, `invalid_value`, `invalid_version`, `version_too_new`, `version_too_old`, `empty_item`, `duplicate_item`, `reserved_item`, `invalid_name`, `reserved_name`, `duplicate_name`, `undefined_reference`, `invalid_reference`, `undeclared_literal` |
 | Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `lookahead_not_allowed`, `invalid_lookahead`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
-| Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `automaton_too_large` |
+| Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `invalid_contextual`, `automaton_too_large` |
 | Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice`, `ambiguous_repetition` |
 | Warnings | `never_adopted`, `unneeded_possessive`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
 | Warnings of the merge | `already_defined` (a [mixin](#mixins) adds what exists; returned by `lexogram.load`, `lexogram.merge` and `lexogram.grammar`, with the mixin as `source`) |

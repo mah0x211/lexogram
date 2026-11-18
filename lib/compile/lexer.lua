@@ -82,6 +82,8 @@ local function label(def)
     local segs = def.segments
     if segs[1] == 'tokens' then
         return 'tokens.' .. segs[2]
+    elseif segs[2] == 'contextual' then
+        return 'keywords.contextual[' .. segs[3] .. ']'
     end
     return segs[1] .. '[' .. segs[2] .. ']'
 end
@@ -203,6 +205,29 @@ local function collect_definitions(grammar)
                 i = i + 1
                 v = rawget(tbl, i)
             end
+            -- contextual keywords are not in the automaton: a contextual
+            -- keyword is read as the pattern token it matches (base)
+            local contextual = field == 'keywords' and rawget(tbl, 'contextual')
+            if contextual then
+                i = 1
+                v = rawget(contextual, i)
+                while v ~= nil do
+                    local id = #defs + 1
+                    defs[id] = {
+                        id = id,
+                        kind = 'contextual',
+                        name = v,
+                        ignore_case = ignore_case,
+                        segments = {
+                            'keywords',
+                            'contextual',
+                            i,
+                        },
+                    }
+                    i = i + 1
+                    v = rawget(contextual, i)
+                end
+            end
         end
     end
     for _, name in ipairs(tables) do
@@ -305,6 +330,98 @@ local function check_conflicts(diagnostics, defs, d, predicates, max)
                               label(b) .. ' can match the same string as ' ..
                                   label(a) .. ', e.g. ' .. quote(example(s)))
                 end
+            end
+        end
+    end
+end
+
+--- winners returns the ids that win in the states of d where the whole
+--- string text can end, taking every target of a dispatch state (whatever
+--- its predicates give); it may thus include ids that no context gives.
+--- @param d table
+--- @param text string
+--- @return table id -> true
+local function winners(d, text)
+    local nclasses, classes, trans = d.nclasses, d.classes, d.trans
+    local dispatch = d.dispatch or {}
+    local function expand(list)
+        local out, seen = {}, {}
+        for _, s in ipairs(list) do
+            local entry = dispatch[s]
+            for _, t in ipairs(entry and entry.targets or {
+                s,
+            }) do
+                if t ~= 0 and not seen[t] then
+                    seen[t] = true
+                    out[#out + 1] = t
+                end
+            end
+        end
+        return out
+    end
+    local list = expand({
+        1,
+    })
+    for i = 1, #text do
+        local c = classes[byte(text, i) + 1]
+        local nxt = {}
+        for _, s in ipairs(list) do
+            nxt[#nxt + 1] = trans[(s - 1) * nclasses + c]
+        end
+        list = expand(nxt)
+    end
+    local ids = {}
+    for _, s in ipairs(list) do
+        local id = d.accept[s]
+        if id > 0 then
+            ids[id] = true
+        end
+    end
+    return ids
+end
+
+--- resolve_contextual sets the base of each contextual keyword definition:
+--- the pattern token that the tokenizer reads its text as (in some context
+--- of its lookaheads), which must be exactly one and not be listed in skip
+--- (it never reaches the parser); otherwise it adds invalid_contextual.
+--- @param diagnostics table[]
+--- @param defs table[]
+--- @param d table automaton of the pattern tokens and literals
+--- @param skip any the skip field of the grammar
+local function resolve_contextual(diagnostics, defs, d, skip)
+    local skipped
+    for _, def in ipairs(defs) do
+        if def.kind == 'contextual' then
+            if not skipped then
+                -- raw reads: the grammar may have metatables
+                skipped = {}
+                local i = 1
+                local name = type(skip) == 'table' and rawget(skip, i)
+                while name do
+                    skipped[name] = true
+                    i = i + 1
+                    name = rawget(skip, i)
+                end
+            end
+            local names, base = {}, nil
+            for id in next, winners(d, def.name) do
+                names[#names + 1] = label(defs[id])
+                base = defs[id].kind == 'token' and id or nil
+            end
+            sort(names, byte_less)
+            if base and #names == 1 and skipped[defs[base].name] then
+                add_error(diagnostics, 'invalid_contextual', def.segments,
+                          label(def) .. ' is read as ' .. names[1] ..
+                              ', which is listed in skip and never reaches' ..
+                              ' the parser')
+            elseif #names == 1 and base then
+                def.base = base
+            else
+                add_error(diagnostics, 'invalid_contextual', def.segments,
+                          label(def) .. ' must be read as exactly one' ..
+                              ' pattern token, which it stands for; it is' ..
+                              ' read as ' ..
+                              (#names == 0 and 'none' or concat(names, ' or ')))
             end
         end
     end
@@ -480,6 +597,8 @@ local function build(grammar, limits)
     if not compiled then
         return too_large(diagnostics, err)
     end
+
+    resolve_contextual(diagnostics, defs, d, rawget(grammar, 'skip'))
 
     local predicates
     if #preds.list > 0 then

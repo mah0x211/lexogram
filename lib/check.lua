@@ -552,8 +552,17 @@ local function check_items(ctx, segments, tbl, n, reserved)
     return first
 end
 
+--- reject_setting reports a string key in an array of names.
+--- @param ctx table
+--- @param segments any[]
+local function reject_setting(ctx, segments)
+    add_error(ctx, 'unknown_field', segments,
+              'unknown field ' .. label(segments))
+end
+
 --- check_item_setting checks a string key in the hash part of symbols or
---- keywords; only ignore_case is allowed.
+--- keywords; ignore_case is allowed in both, and contextual (an array of
+--- keywords that are not reserved) in keywords.
 --- @param ctx table
 --- @param segments any[]
 --- @param key string
@@ -561,18 +570,15 @@ end
 local function check_item_setting(ctx, segments, key, value)
     if key == 'ignore_case' then
         expect_type(ctx, segments, value, 'boolean')
+    elseif key == 'contextual' and segments[1] == 'keywords' then
+        if expect_type(ctx, segments, value, 'table') then
+            local n = scan_array_keys(ctx, segments, value, reject_setting)
+            check_items(ctx, segments, value, n, true)
+        end
     else
         add_error(ctx, 'unknown_field', segments,
                   'unknown field ' .. label(segments))
     end
-end
-
---- reject_setting reports a string key in an array of names.
---- @param ctx table
---- @param segments any[]
-local function reject_setting(ctx, segments)
-    add_error(ctx, 'unknown_field', segments,
-              'unknown field ' .. label(segments))
 end
 
 --- check_item_list checks symbols or keywords and returns its array
@@ -628,14 +634,39 @@ function check_prefixed(ctx, segments, tbl)
     end
 end
 
---- check_cross_duplicates reports keywords items that also are symbols.
---- Only the first occurrence of an item in keywords is reported; later
---- occurrences are already duplicate_item within keywords.
+--- check_cross_duplicates reports keywords items that also are symbols,
+--- and contextual keywords that also are keywords items or symbols. Only
+--- the first occurrence of an item is reported; later occurrences are
+--- already duplicate_item within their array.
 --- @param ctx table
 --- @param keywords table result of check_item_list for keywords
---- @param symbols table result of check_item_list for symbols
+--- @param symbols table? result of check_item_list for symbols
 local function check_cross_duplicates(ctx, keywords, symbols)
-    local kw_first, sym_first = keywords.first, symbols.first
+    local kw_first, sym_first = keywords.first, symbols and symbols.first or {}
+    -- the contextual keywords must differ from the reserved ones and from
+    -- the symbols (their own duplicates are reported by check_items)
+    local contextual = rawget(keywords.tbl, 'contextual')
+    if type(contextual) == 'table' then
+        local seen = {}
+        for i = 1, array_length(contextual) do
+            local v = rawget(contextual, i)
+            if type(v) == 'string' and not seen[v] then
+                seen[v] = true
+                local segs = {
+                    'keywords',
+                    'contextual',
+                    i,
+                }
+                local other =
+                    kw_first[v] and 'keywords[' .. kw_first[v] .. ']' or
+                        sym_first[v] and 'symbols[' .. sym_first[v] .. ']'
+                if other then
+                    add_error(ctx, 'duplicate_item', segs, label(segs) ..
+                                  ' duplicates the item at ' .. other)
+                end
+            end
+        end
+    end
     -- visit by index so that the emission order is deterministic
     for i = 1, keywords.n do
         local v = rawget(keywords.tbl, i)
@@ -745,7 +776,7 @@ local function check_structure(ctx)
         end
     end
 
-    if results.symbols and results.keywords then
+    if results.keywords then
         check_cross_duplicates(ctx, results.keywords, results.symbols)
     end
 end
@@ -1148,6 +1179,24 @@ local function collect_literals(grammar)
                         value = v,
                         ignore_case = ignore_case,
                     }
+                end
+            end
+            -- contextual keywords are declared literals too
+            local contextual = name == 'keywords' and rawget(tbl, 'contextual')
+            if type(contextual) == 'table' then
+                for i = 1, array_length(contextual) do
+                    local v = rawget(contextual, i)
+                    if type(v) == 'string' and v ~= '' then
+                        items[#items + 1] = {
+                            segments = {
+                                'keywords',
+                                'contextual',
+                                i,
+                            },
+                            value = v,
+                            ignore_case = ignore_case,
+                        }
+                    end
                 end
             end
         elseif tbl ~= nil then
