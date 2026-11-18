@@ -122,6 +122,39 @@ function testcase.extend_keeps_the_base_without_differences()
     assert.equal(extend(base(), {
         extends = 'base',
     }), base())
+    -- a table that the base refers to twice stays one table in the copy
+    local shared = base()
+    shared.tokens.other = shared.tokens.block
+    local grammar = extend(shared, {})
+    assert.rawequal(grammar.tokens.other, grammar.tokens.block)
+    assert.not_rawequal(grammar.tokens.block, shared.tokens.block)
+end
+
+function testcase.extend_applies_marks_of_one_name_in_a_fixed_order()
+    -- the items and the settings of one array, in the order of the marks
+    local grammar = assert(extend(base(), {
+        ['++keywords'] = {
+            ignore_case = true,
+        },
+        ['+keywords'] = {
+            'until',
+        },
+    }))
+    assert.equal(grammar.keywords, {
+        'local',
+        'goto',
+        'until',
+        ignore_case = true,
+    })
+    -- --symbols removes the setting that symbols does not have, after -
+    assert.equal(err_of({
+        ['-symbols'] = {
+            '-',
+        },
+        ['--symbols'] = {
+            'ignore_case',
+        },
+    }), 'symbols.ignore_case: does not exist')
 end
 
 function testcase.extend_enters_tables_and_edits_settings()
@@ -186,6 +219,20 @@ function testcase.extend_reports_missing_targets_and_existing_additions()
             },
         },
     }), 'tokens.name: is not a table')
+    assert.equal(err_of({
+        tokens = {
+            ['+name'] = {
+                'x',
+            },
+        },
+    }), 'tokens.name: is not a table')
+    assert.equal(err_of({
+        tokens = {
+            ['-none'] = {
+                'x',
+            },
+        },
+    }), 'tokens.none: does not exist')
     assert.equal(err_of({
         tokens = {
             none = {},
