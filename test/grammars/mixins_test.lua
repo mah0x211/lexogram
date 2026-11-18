@@ -1,7 +1,10 @@
 local testcase = require('testcase')
 local assert = require('assert')
-local lexogram = require('lexogram')
 local builtin_value = require('lexogram.grammar').builtin_value
+-- the file is loaded before the test runner moves to its directory, so the
+-- helper is found next to the file itself
+local shared = dofile(debug.getinfo(1, 'S').source:match('^@(.-)[^/]*$') ..
+                          'shared.lua')
 
 function testcase.shebang_adds_a_leading_token()
     local chain, err, kind = builtin_value('shebang')
@@ -43,7 +46,7 @@ function testcase.mixins_are_no_grammars()
         'shebang',
         'bom_shebang',
     }) do
-        local grammar, err = lexogram.load('lexogram:' .. name)
+        local grammar, err = shared.load('lexogram:' .. name)
         assert.is_nil(grammar)
         assert.equal(err, 'lexogram:' .. name ..
                          ': a mixin is not a grammar (embed it with embeds)')
@@ -52,8 +55,8 @@ end
 
 function testcase.grammars_embed_the_mixins()
     -- the token of each grammar is that of its mixin
-    local lua51 = assert(lexogram.load('lexogram:lua51_shebang'))
-    local lua52 = assert(lexogram.load('lexogram:lua52_shebang'))
+    local lua51 = assert(shared.load('lexogram:lua51_shebang'))
+    local lua52 = assert(shared.load('lexogram:lua52_shebang'))
 
     assert.equal(lua51.tokens.shebang, ' "#" [^\\n]* ')
     assert.equal(lua52.tokens.shebang,

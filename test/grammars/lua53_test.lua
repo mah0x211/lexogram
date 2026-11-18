@@ -5,28 +5,15 @@ local events = require('lexogram.events')
 
 local COMPILED
 
--- run fn with the coverage hook removed: compiling the full grammar takes
--- far too long under luacov's line hook
-local function without_hook(fn, ...)
-    local hook, mask, count = debug.gethook()
-    debug.sethook()
-    local res = {
-        pcall(fn, ...),
-    }
-    if hook then
-        debug.sethook(hook, mask, count)
-    end
-    if not res[1] then
-        error(res[2], 0)
-    end
-    return res[2], res[3]
-end
+-- the file is loaded before the test runner moves to its directory, so the
+-- helper is found next to the file itself
+local shared = dofile(debug.getinfo(1, 'S').source:match('^@(.-)[^/]*$') ..
+                          'shared.lua')
 
 local function compiled()
     if not COMPILED then
-        local grammar = assert(lexogram.load('lexogram:lua53'))
         local diagnostics
-        COMPILED, diagnostics = without_hook(lexogram.compile, grammar)
+        COMPILED, diagnostics = shared.compile('lexogram:lua53')
         assert.equal(diagnostics, {})
     end
     return COMPILED
@@ -83,8 +70,8 @@ local function token_names(source)
 end
 
 function testcase.grammar_extends_lua52()
-    local grammar = assert(lexogram.load('lexogram:lua53'))
-    local lua52 = assert(lexogram.load('lexogram:lua52'))
+    local grammar = assert(shared.load('lexogram:lua53'))
+    local lua52 = assert(shared.load('lexogram:lua52'))
 
     assert.equal(grammar.name, 'lua53')
     assert.equal(grammar.version, '1.0.0')
