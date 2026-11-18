@@ -45,18 +45,16 @@
 --
 -- tokens
 --
--- Three tokens change, one fragment is added and one removed; the others
--- are those of lua51.
+-- Three tokens change; the others are those of lua51.
 --
 --   number             a hexadecimal number may have a fractional part and
---                      a binary exponent: 0x1.8p3, 0xA.Fp-2, 0x.8; the lexer
---                      reads hexadecimal digits and dots with exponent marks
---                      (e or E, p or P after 0x) and their signs, and
---                      rejects the whole run unless it is one number, so a
---                      decimal number is not followed by (?![0-9A-Fa-f.])
---                      and a hexadecimal one by (?![0-9A-Fa-fPp.]) (3e,
---                      1..2, 1e5..x, 0x and 0x1p are no numbers; 3print is
---                      the number 3 and the name print)
+--                      a binary exponent: 0x1.8p3, 0xA.Fp-2, 0x.8; the run
+--                      that the lexer reads is hexadecimal digits and dots
+--                      with exponent marks (e or E, p or P after a first 0x,
+--                      also after a dot) and their signs; a run that is not
+--                      one number is an invalid number (3e, 1..2, 1e5..x,
+--                      0x, 0x1p and .0x; 3print is the number 3 and the
+--                      name print)
 --   string             a backslash may be followed only by an escape of
 --                      Lua 5.2: \a \b \f \n \r \t \v \\ \" \', a line break,
 --                      \xXX (two hexadecimal digits), _decimal_escape or \z
@@ -64,10 +62,6 @@
 --                      it); any other escape is an error, as in the lexer of
 --                      Lua 5.2
 --   _escape            fragment: the escapes above
---   _integer           fragment: the digits of a decimal number; a first 0
---                      followed by x or X starts a hexadecimal number
---                      instead (also after a dot: .0x is no number); it
---                      replaces _decimal, which is removed
 --   long_string        nest is removed: a [[ inside a long bracket of level
 --                      0 is ordinary text, as in Lua 5.2 (long_comment,
 --                      which reads its body as a long_string, follows)
@@ -127,35 +121,30 @@ return assert(require('lexogram.grammar')({
     ['+symbols'] = {
         '::',
     },
-    -- the decimal part of a number is _integer instead
-    ['--tokens'] = {
-        '_decimal',
-    },
-    ['++tokens'] = {
-        -- the digits of a decimal number; a first 0 followed by x or X
-        -- starts a hexadecimal number instead
-        _integer = [[ "0" (?![xX]) DIGIT* | [1-9] DIGIT* ]],
-    },
     tokens = {
         ['--long_string'] = {
             'nest',
         },
-        -- the lexer reads hexadecimal digits and dots, with exponent marks
-        -- (e or E, p or P after 0x) and their signs, and rejects the whole
-        -- run unless it is one number: a number is not followed by what
-        -- the lexer would read on
-        ['=number'] = [[
-            (_integer ("." DIGIT*)? | "." _integer) _exponent?
-              (?![0-9A-Fa-f.])
-            | "0" ("x" | "X") (HEXDIGIT+ ("." HEXDIGIT*)? | "." HEXDIGIT+)
-              (("p" | "P") ("+" | "-")? _digits)? (?![0-9A-Fa-fPp.])
-        ]],
+        -- the run that the lexer reads: hexadecimal digits and dots, with
+        -- exponent marks (e or E, p or P after a first 0x, also after a dot)
+        -- and their signs; then the forms of a number
+        ['=number'] = {
+            [[
+                "."? "0" [xX] ([pP] ("+" | "-")? | [0-9A-Fa-f.])*
+                | (DIGIT | "." DIGIT) ([eE] ("+" | "-")? | [0-9A-Fa-f.])*
+            ]],
+            [[
+                _decimal _exponent?
+                | "0" [xX] (HEXDIGIT+ ("." HEXDIGIT*)? | "." HEXDIGIT+)
+                  ([pP] ("+" | "-")? _digits)?
+            ]],
+        },
         -- a line break is \r\n, \n\r, \n or \r, as the lexer reads it
         ['=_escape'] = [[
             "\\" (
                 [abfnrtv\\\"']
                 | "\r\n" | "\n\r" | "\n" | "\r"
-                | "x" HEXDIGIT HEXDIGIT
+                | "x" HEXDIGIT{2}
                 | _decimal_escape
                 | "z" [ \t\r\n\x0B\x0C]*
             )

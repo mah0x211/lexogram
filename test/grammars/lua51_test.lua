@@ -334,6 +334,24 @@ function testcase.a_parenthesis_after_an_expression_is_a_call()
     })
 end
 
+function testcase.numbers_follow_the_lua_5_1_lexer()
+    -- the run that the lexer reads must be one number (malformed number)
+    for _, source in ipairs({
+        'x = 3e',
+        'x = 1..2',
+        'x = 3print',
+        'x = 0x1p+4',
+    }) do
+        local result, err = lexogram.parse(compiled(), source)
+        assert.is_nil(result)
+        assert.equal(err.code, 'invalid_token')
+        assert.equal(err.pos, 5)
+        assert.equal(err.message, 'invalid number')
+    end
+    -- an exponent ends the dots: 1e5 .. x
+    parse('x = 1e5..x')
+end
+
 function testcase.long_brackets_follow_the_lua_5_1_lexer()
     -- level 0: an inner [[ is an error, as in Lua 5.1
     local result, err = lexogram.parse(compiled(), 'x = [[ a [[ b ]]')

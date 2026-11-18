@@ -219,6 +219,20 @@ function testcase.tokens_of_lua52()
         'number:0x10',
         '}:}',
     })
+    -- the run that the lexer reads ends before a letter that is no
+    -- hexadecimal digit; a 0x after a dot starts a hexadecimal run, which
+    -- is an invalid number here (malformed number)
+    assert.equal(token_names('x = 3print'), {
+        'name:x',
+        '=:=',
+        'number:3',
+        'name:print',
+    })
+    local result, err = lexogram.parse(compiled(), 'x = .0x1')
+    assert.is_nil(result)
+    assert.equal(err.code, 'invalid_token')
+    assert.equal(err.pos, 5)
+    assert.equal(err.message, 'invalid number')
     -- the escapes of Lua 5.2, \z skipping a line break
     assert.equal(token_names('x = "\\x41\\65\\z\n  \\t\\a\\\\\\""'), {
         'name:x',

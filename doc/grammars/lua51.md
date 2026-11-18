@@ -41,7 +41,7 @@ Pattern tokens:
 | Token | Matches |
 |---|---|
 | `name` | `[A-Za-z_][A-Za-z0-9_]*` |
-| `number` | `3`, `3.0`, `3.`, `.5`, `314.16e-2`, `0x56`, `0x1p4`: `_decimal`, `_decimal _exponent`, or `0x` and hexadecimal digits with an optional `p` and decimal digits, as `strtod` reads them. The lexer of Lua 5.1 reads digits and dots, an exponent mark with its sign, then letters, digits and `_`, and rejects the whole run unless it is one number; so a number is not followed by what the lexer would read on: `(?![0-9A-Za-z_.])`, or `(?![0-9A-Za-z_])` after an exponent or a hexadecimal number. `3e`, `1..2`, `3print` and `0x1p+4` are no numbers, and `1e5..x` is `1e5 .. x` |
+| `number` | `3`, `3.0`, `3.`, `.5`, `314.16e-2`, `0x56`, `0x1p4`, written as an [array of two patterns](../grammar.md#arrays-of-patterns). The first is the run that the lexer of Lua 5.1 reads: digits and dots, an exponent mark with its sign, then letters, digits and `_`. The second is the forms that `strtod` must read from all of it: `_decimal _exponent?`, or `0x` and hexadecimal digits with an optional `p` and decimal digits. A run of another form is an `invalid_token` error (Lua 5.1 reports a malformed number): `3e`, `1..2`, `3print` and `0x1p+4`. `1e5..x` is `1e5 .. x`, as an exponent ends the dots |
 | `string` | `"..."` and `'...'` with `_escape`; a line break without a backslash cannot be inside it |
 | `comment` | `--` and the rest of the line |
 | `space` | Space, tab, carriage return, line feed, vertical tab and form feed |
@@ -53,7 +53,7 @@ Fragments (parts of the patterns above, not tokens):
 |---|---|
 | `_decimal` | `_digits ("." DIGIT*)? \| "." _digits` |
 | `_digits` | `DIGIT+` |
-| `_exponent` | `("e" \| "E") ("+" \| "-")? _digits` |
+| `_exponent` | `[eE] ("+" \| "-")? _digits` |
 | `_escape` | A backslash and a line break (`\r\n`, `\n\r`, `\n` or `\r`), any other byte that is no digit (`\n`, `\\`, `\q`), or `_decimal_escape` |
 | `_decimal_escape` | One to three digits, as many as there are, up to 255 (`\0`, `\65`, `\255`; `\256` is an error, as in Lua 5.1) |
 

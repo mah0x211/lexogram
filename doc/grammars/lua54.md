@@ -36,7 +36,7 @@ One token and one fragment change; the other tokens are those of [`lua53`](lua53
 
 | Token | Lua 5.4 |
 |---|---|
-| `number` | The lexer of Lua 5.4 reads one letter or `_` more after the run of `lua53` and rejects it as a malformed number, so every number is not followed by `(?![0-9A-Za-z_.])`: `3print` is no number either |
+| `number` | The lexer of Lua 5.4 reads one letter or `_` more after the run of `lua53`, which makes it an `invalid_token` error (Lua 5.4 reports a malformed number): `3print` is no number either |
 | `_code_point` | Fragment: the digits of a value below 2³¹ (`\u{7FFFFFFF}`); Lua 5.4 checks the value, so `\u{80000000}` is an error |
 
 A hexadecimal integer that overflows wraps around, which is a matter of its value, not of the token.
