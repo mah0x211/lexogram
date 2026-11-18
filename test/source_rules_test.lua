@@ -152,6 +152,7 @@ function testcase.module_files_lists_rockspec_modules()
         'grammars/lua54_shebang.lua',
         'grammars/lua55.lua',
         'grammars/lua55_shebang.lua',
+        'grammars/luajit.lua',
         'grammars/shebang.lua',
         'lib/loader.lua',
         'lib/pattern.lua',

@@ -21,14 +21,17 @@
 --
 --
 -- tools/conformance.lua: compares the sources that a grammar accepts with
--- the sources that the official compiler accepts (luac -p). Run it on a
--- machine with luac installed; it is not a module of the library.
+-- the sources that the official compiler accepts (luac -p, or loadfile of
+-- LuaJIT, which has no luac). Run it on a machine with luac or LuaJIT
+-- installed; it is not a module of the library.
 --
 --   lua tools/conformance.lua [--strip-bom] [--strip-shebang] <grammar>
 --       <luac> [file ...]
 --
 -- <grammar> is a grammar file or a built-in grammar ("lexogram:lua51"),
--- <luac> the compiler of the matching Lua version. The files are read from
+-- <luac> the compiler of the matching Lua version, or a LuaJIT executable
+-- (told by the output of -v), which checks each file with loadfile. The
+-- files are read from
 -- the arguments, or one per line from the standard input. Before parsing,
 -- --strip-bom blanks a UTF-8 byte order mark at the start, as the file
 -- loader of Lua 5.2 and later does, and --strip-shebang a first line that
@@ -61,6 +64,35 @@ local function official_accepts(luac, pathname)
     return out == ''
 end
 
+-- The script that LuaJIT runs to check the file named by its argument; it
+-- writes the error, if any.
+local LOADFILE = 'local f, err = loadfile(arg[1]) if not f then' ..
+                     ' io.write(err) end'
+
+--- luajit_accepts returns true if loadfile of LuaJIT accepts the file at
+--- pathname.
+--- @param luajit string
+--- @param pathname string
+--- @return boolean
+local function luajit_accepts(luajit, pathname)
+    local p = assert(io.popen('printf %s ' .. shell_quote(LOADFILE) .. ' | ' ..
+                                  shell_quote(luajit) .. ' - ' ..
+                                  shell_quote(pathname) .. ' 2>&1'))
+    local out = p:read('*a')
+    p:close()
+    return out == ''
+end
+
+--- is_luajit returns true if the executable is LuaJIT.
+--- @param exe string
+--- @return boolean
+local function is_luajit(exe)
+    local p = assert(io.popen(shell_quote(exe) .. ' -v 2>&1'))
+    local out = p:read('*a')
+    p:close()
+    return out:find('^LuaJIT') ~= nil
+end
+
 --- main runs the comparison and returns the exit status.
 --- @param args string[]
 --- @return integer
@@ -80,6 +112,7 @@ local function main(args)
                             ' [--strip-shebang] <grammar> <luac> [file ...]\n')
         return 2
     end
+    local accepts = is_luajit(luac) and luajit_accepts or official_accepts
     local grammar = assert(lexogram.load(name))
     local compiled, diagnostics = lexogram.compile(grammar)
     if not compiled then
@@ -117,7 +150,7 @@ local function main(args)
             end
             src = start .. src
             local ours = lexogram.parse(compiled, src) ~= nil
-            local theirs = official_accepts(luac, pathname)
+            local theirs = accepts(luac, pathname)
             if ours == theirs then
                 agree = agree + 1
             elseif ours then
