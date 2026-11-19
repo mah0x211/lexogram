@@ -34,10 +34,11 @@
 -- lexogram.grammars.name, read with require (see lexogram.grammar). A
 -- grammar whose table has extends is merged into a copy of that grammar,
 -- and of the mixins it embeds (embeds), by lexogram.extend after the file
--- has run. A file whose table has mixin is a mixin: its metadata and the
--- shape of its difference are checked, and the mixin it extends is
--- resolved, but it is not a grammar: it can be embedded only, and neither
--- loaded nor imported nor extended by a grammar.
+-- has run; the mixins of a grammar without extends are applied to a copy
+-- of the grammar itself. A file whose table has mixin is a mixin: its
+-- metadata and the shape of its difference are checked, and the mixin it
+-- extends is resolved, but it is not a grammar: it can be embedded only,
+-- and neither loaded nor imported nor extended by a grammar.
 local type = type
 local error = error
 local pcall = pcall
@@ -279,6 +280,54 @@ local function get_named(state, pathname, name, field)
     return value, nil, kind
 end
 
+--- resolve_mixins returns the chains of the mixins that the grammar def
+--- of the file at pathname embeds, or nil and an error message.
+--- @param state table
+--- @param pathname string
+--- @param def table
+--- @return table[][]? mixins
+--- @return string? err
+local function resolve_mixins(state, pathname, def)
+    local names, err = extend.embeds(def)
+    if not names then
+        return nil, pathname .. ': ' .. err
+    end
+    local mixins = {}
+    for i, v in ipairs(names) do
+        local chain, kind
+        chain, err, kind = get_named(state, pathname, v, 'embeds')
+        if not chain then
+            return nil, err
+        elseif kind ~= 'mixin' then
+            return nil, pathname .. ': cannot embed ' .. describe_name(v) ..
+                       ': it is not a mixin'
+        end
+        mixins[i] = chain
+    end
+    return mixins
+end
+
+--- merged returns the grammar that extend.extend or extend.embed returned
+--- for the file at pathname, adding the warnings of the mixins to
+--- state.warnings, or nil and an error message.
+--- @param state table
+--- @param pathname string
+--- @param grammar table?
+--- @param err string?
+--- @param warnings table[]?
+--- @return table? grammar
+--- @return string? err
+local function merged(state, pathname, grammar, err, warnings)
+    if not grammar then
+        return nil, pathname .. ': ' .. err
+    end
+    local list = state.warnings
+    for _, w in ipairs(warnings) do
+        list[#list + 1] = w
+    end
+    return grammar
+end
+
 --- resolve_extends merges the grammar diff of the file at pathname into a
 --- copy of the grammar it extends and of the mixins it embeds; the
 --- warnings of the mixins are added to state.warnings.
@@ -298,34 +347,28 @@ local function resolve_extends(state, pathname, diff)
     end
     local mixins
     if rawget(diff, 'embeds') ~= nil then
-        local names
-        names, err = extend.embeds(diff)
-        if not names then
-            return nil, pathname .. ': ' .. err
-        end
-        mixins = {}
-        for i, v in ipairs(names) do
-            local chain
-            chain, err, kind = get_named(state, pathname, v, 'embeds')
-            if not chain then
-                return nil, err
-            elseif kind ~= 'mixin' then
-                return nil, pathname .. ': cannot embed ' .. describe_name(v) ..
-                           ': it is not a mixin'
-            end
-            mixins[i] = chain
+        mixins, err = resolve_mixins(state, pathname, diff)
+        if not mixins then
+            return nil, err
         end
     end
-    local grammar, warnings
-    grammar, err, warnings = extend.extend(base, diff, mixins)
-    if not grammar then
-        return nil, pathname .. ': ' .. err
+    return merged(state, pathname, extend.extend(base, diff, mixins))
+end
+
+--- resolve_embeds applies the mixins that the grammar def of the file at
+--- pathname embeds to a copy of it, which extends no other grammar; the
+--- warnings of the mixins are added to state.warnings.
+--- @param state table
+--- @param pathname string
+--- @param def table
+--- @return table? grammar
+--- @return string? err
+local function resolve_embeds(state, pathname, def)
+    local mixins, err = resolve_mixins(state, pathname, def)
+    if not mixins then
+        return nil, err
     end
-    local list = state.warnings
-    for _, w in ipairs(warnings) do
-        list[#list + 1] = w
-    end
-    return grammar
+    return merged(state, pathname, extend.embed(def, mixins))
 end
 
 --- resolve_mixin checks the mixin def of the file at pathname and returns
@@ -387,7 +430,7 @@ local function run_chunk(state, pathname, fn)
     elseif rawget(res, 'extends') ~= nil then
         res, err = resolve_extends(state, pathname, res)
     elseif rawget(res, 'embeds') ~= nil then
-        res, err = nil, pathname .. ': embeds needs extends'
+        res, err = resolve_embeds(state, pathname, res)
     end
     stack[#stack] = nil
     state.active[pathname] = nil

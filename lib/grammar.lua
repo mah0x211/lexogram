@@ -37,7 +37,8 @@
 -- compiled from the Lua source of the grammar (see lexogram.source): each
 -- call runs the table constructors, without walking a table to copy it.
 --
--- A grammar may embed built-in mixins (embeds), which it needs extends for.
+-- A grammar may embed built-in mixins (embeds), applied after the grammar
+-- it extends, or to the grammar itself when it extends none.
 -- A built-in mixin (mixin = true, see lexogram.extend) is defined the same
 -- way: the function checks its metadata and the shape of its difference,
 -- and returns a function that returns a new copy of the mixin as written.
@@ -281,12 +282,12 @@ local function embedded(def)
 end
 
 --- new checks the grammar def, merged into the grammar it extends and the
---- mixins it embeds if it has extends, and returns a function that returns
---- a new copy of the result on each call, nil and the diagnostics: the
---- warnings of the mixins, in the order they were applied, and then those
---- of the check. On an error it returns nil, a message (one line per
---- error, for assert) and, when the check ran, its diagnostics. A mixin
---- def is checked by new_mixin.
+--- mixins it embeds, and returns a function that returns a new copy of the
+--- result on each call, nil and the diagnostics: the warnings of the
+--- mixins, in the order they were applied, and then those of the check.
+--- On an error it returns nil, a message (one line per error, for assert)
+--- and, when the check ran, its diagnostics. A mixin def is checked by
+--- new_mixin.
 --- @param def table
 --- @return function? fn
 --- @return string? err
@@ -326,7 +327,14 @@ local function new(def)
             return nil, err
         end
     elseif rawget(def, 'embeds') ~= nil then
-        return nil, 'embeds needs extends'
+        local mixins, err = embedded(def)
+        if not mixins then
+            return nil, err
+        end
+        grammar, err, warnings = extend.embed(def, mixins)
+        if not grammar then
+            return nil, err
+        end
     end
 
     local diagnostics, lexer, syntax = check.run(grammar)
