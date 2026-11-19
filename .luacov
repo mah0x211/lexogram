@@ -5,6 +5,7 @@ modules = {
     ['lexogram'] = 'lib/lexogram.lua',
     ['lexogram.analyzer'] = 'lib/analyzer.lua',
     ['lexogram.check'] = 'lib/check.lua',
+    ['lexogram.cli'] = 'lib/cli.lua',
     ['lexogram.compat'] = 'lib/compat.lua',
     ['lexogram.compile'] = 'lib/compile.lua',
     ['lexogram.compile.codegen'] = 'lib/compile/codegen.lua',

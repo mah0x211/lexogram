@@ -19,6 +19,7 @@ build = {
         ["lexogram"] = "lib/lexogram.lua",
         ["lexogram.analyzer"] = "lib/analyzer.lua",
         ["lexogram.check"] = "lib/check.lua",
+        ["lexogram.cli"] = "lib/cli.lua",
         ["lexogram.compat"] = "lib/compat.lua",
         ["lexogram.compile"] = "lib/compile.lua",
         ["lexogram.compile.codegen"] = "lib/compile/codegen.lua",
@@ -59,5 +60,10 @@ build = {
         ["lexogram.tokenizer"] = "lib/tokenizer.lua",
         ["lexogram.utf8"] = "lib/utf8.lua",
         ["lexogram.version"] = "lib/version.lua",
+    },
+    install = {
+        bin = {
+            lexogram = "bin/lexogram",
+        },
     },
 }
