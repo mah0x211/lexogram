@@ -49,8 +49,23 @@
 --                       df, dd and dl of decimal floating constants
 --   character_constant  the prefix u8 is added
 --
+-- The symbol :: is added, for the names of attributes.
+--
 -- rules
 --
+--   attribute_specifier_sequence, attribute_specifier, attribute_list,
+--   attribute, attribute_argument_clause
+--                       attributes, [[ name, prefix::name(arguments) ]],
+--                       where C23 places them: at the start of
+--                       declarations, function definitions, members,
+--                       parameters, statements and labels; after the
+--                       specifiers, the identifier, the array and function
+--                       suffixes and each * of declarators; after struct,
+--                       union and enum; after the names of enumerators.
+--                       The arguments are any tokens with balanced
+--                       brackets.
+--   attribute_declaration
+--                       attributes alone and ;, a declaration
 --   member_declaration, member_declarator_list, member_declarator
 --                       the names of C23 for struct_declaration,
 --                       struct_declarator_list and struct_declarator
@@ -91,6 +106,9 @@ return assert(require('lexogram.grammar')({
         '_Decimal32',
         '_Decimal64',
         '_Decimal128',
+    },
+    ['+symbols'] = {
+        '::',
     },
     ['++tokens'] = {
         -- digits with separators
@@ -135,9 +153,58 @@ return assert(require('lexogram.grammar')({
         'struct_declarator',
     },
     ['++rules'] = {
+        -- attributes: [[ name, prefix::name(arguments) ]], whose arguments
+        -- are any tokens with balanced parentheses, brackets and braces
+        attribute_specifier_sequence = [[ attribute_specifier+ ]],
+        attribute_specifier = [[
+            _lbracket _lbracket attribute_list _rbracket _rbracket
+        ]],
+        attribute_list = [[ attribute? ("," attribute?)* ]],
+        attribute = [[
+            _attribute_name ("::" _attribute_name)? attribute_argument_clause?
+        ]],
+        -- a keyword in an attribute is a name
+        _attribute_name = [[ identifier | _keyword ]],
+        attribute_argument_clause = [[ "(" _balanced_token* ")" ]],
+        _balanced_token = [[
+            "(" _balanced_token* ")" | _lbracket _balanced_token* _rbracket
+            | _lbrace _balanced_token* _rbrace
+            | identifier | number | character_constant | string_literal
+            | "." | "->" | "++" | "--" | "&" | "*" | "+" | "-" | "~" | "!"
+            | "/" | "%" | "<<" | ">>" | "<" | ">" | "<=" | ">=" | "==" | "!="
+            | "^" | "|" | "&&" | "||" | "?" | ":" | "::" | ";" | "..." | "="
+            | "*=" | "/=" | "%=" | "+=" | "-=" | "<<=" | ">>=" | "&=" | "^="
+            | "|=" | "," | _keyword
+        ]],
+        -- the keywords of c23
+        _keyword = [[
+            "auto" | "break" | "case" | "char" | "const" | "continue"
+            | "default" | "do" | "double" | "else" | "enum" | "extern"
+            | "float" | "for" | "goto" | "if" | "inline" | "int" | "long"
+            | "register" | "restrict" | "return" | "short" | "signed"
+            | "sizeof" | "static" | "struct" | "switch" | "typedef" | "union"
+            | "unsigned" | "void" | "volatile" | "while" | "_Bool"
+            | "_Complex" | "_Imaginary" | "_Alignas" | "_Alignof" | "_Atomic"
+            | "_Generic" | "_Noreturn" | "_Static_assert" | "_Thread_local"
+            | "alignas" | "alignof" | "bool" | "constexpr" | "false"
+            | "nullptr" | "static_assert" | "thread_local" | "true" | "typeof"
+            | "typeof_unqual" | "_BitInt" | "_Decimal32" | "_Decimal64"
+            | "_Decimal128"
+        ]],
+        attribute_declaration = [[ attribute_specifier_sequence ";" ]],
+        -- the rest of a declaration with attributes before its specifiers,
+        -- which has declarators
+        _declarators_rest = [[
+            _keyword_specifier _declarators_rest
+            | attribute_specifier_sequence init_declarator_list ";"
+            | (
+                (init_declarator_list ";")
+                / (type_specifier _declarators_rest)
+            )
+        ]],
         member_declaration = [[
-            _qualifier_or_keyword_type _struct_rest
-            | type_specifier _struct_rest
+            attribute_specifier_sequence?
+            (_qualifier_or_keyword_type | type_specifier) _struct_rest
             | static_assert_declaration
         ]],
         member_declarator_list = [[
@@ -161,10 +228,14 @@ return assert(require('lexogram.grammar')({
             | type_specifier | _plain_qualifier
         ]],
         label = [[
-            identifier ":" | "case" constant_expression ":" | "default" ":"
+            attribute_specifier_sequence?
+            (identifier ":" | "case" constant_expression ":" | "default" ":")
         ]],
+        -- two tokens do not tell the attributes of an expression statement
+        -- from those of the others, so it is tried first
         unlabeled_statement = [[
-            expression_statement | primary_block | jump_statement
+            expression_statement
+            / attribute_specifier_sequence? (primary_block | jump_statement)
         ]],
         primary_block = [[
             compound_statement | selection_statement | iteration_statement
@@ -172,6 +243,94 @@ return assert(require('lexogram.grammar')({
     },
     rules = {
         ['=_struct_body'] = [[ _lbrace member_declaration+ _rbrace ]],
+        ['=struct_or_union_specifier'] = [[
+            ("struct" | "union") attribute_specifier_sequence?
+            (identifier _struct_body? | _struct_body)
+        ]],
+        ['=_struct_rest'] = [[
+            _qualifier_or_keyword_type _struct_rest
+            | attribute_specifier_sequence _struct_declarators ";"
+            | (
+                (_struct_declarators ";")
+                / (type_specifier _struct_rest)
+            )
+        ]],
+        ['=function_definition'] = [[
+            attribute_specifier_sequence?
+            (_keyword_specifier | type_specifier) _function_rest
+        ]],
+        -- a declaration with attributes before its specifiers has
+        -- declarators; two tokens do not tell those attributes from an
+        -- attribute declaration, which is tried last
+        ['=declaration'] = [[
+            (
+                (_keyword_specifier | type_specifier) _declaration_rest
+                | attribute_specifier_sequence
+                  (_keyword_specifier | type_specifier) _declarators_rest
+                | static_assert_declaration
+            )
+            / attribute_declaration
+        ]],
+        ['=_declaration_rest'] = [[
+            _keyword_specifier _declaration_rest
+            | attribute_specifier_sequence init_declarator_list? ";"
+            | (
+                (init_declarator_list? ";")
+                / (type_specifier _declaration_rest)
+            )
+        ]],
+        ['=direct_declarator'] = [[
+            identifier attribute_specifier_sequence? _suffixes
+            | "(" _parenthesized
+        ]],
+        -- two tokens after an identifier do not tell attributes from an
+        -- array suffix, so the identifier without suffixes is tried first
+        ['=_parenthesized'] = [[
+            (
+                ((identifier attribute_specifier_sequence?)->direct_declarator)
+                ->declarator ")" _required_suffixes
+                / ((identifier attribute_specifier_sequence? _required_suffixes)
+                  ->direct_declarator)->declarator ")" _suffixes
+            )
+            | (pointer direct_declarator)->declarator ")" _suffixes
+            | (("(" _parenthesized)->direct_declarator)->declarator ")"
+              _suffixes
+        ]],
+        ['=pointer'] = [[
+            ("*" attribute_specifier_sequence? type_qualifier*)+
+        ]],
+        ['=_array_suffix'] = [[
+            _lbracket _array_size? _rbracket attribute_specifier_sequence?
+        ]],
+        ['=function_suffix'] = [[
+            "(" parameter_type_list? ")" attribute_specifier_sequence?
+        ]],
+        ['=parameter_declaration'] = [[
+            attribute_specifier_sequence?
+            _nontype_specifier* _type_part _parameter_rest?
+        ]],
+        ['=_parameter_rest'] = [[
+            _keyword_specifier _parameter_rest?
+            | attribute_specifier_sequence (declarator / abstract_declarator)?
+            | (
+                declarator / abstract_declarator
+                / (type_specifier _parameter_rest?)
+            )
+        ]],
+        -- the tokens "(" "[" start both an abstract declarator in
+        -- parentheses and a function suffix whose first parameter has
+        -- attributes, so the abstract declarator is tried first
+        ['=direct_abstract_declarator'] = [[
+            (("(" abstract_declarator ")" / function_suffix) | _array_suffix)
+            _array_suffix* function_suffix?
+        ]],
+        ['=type_name'] = [[
+            (_qualifier_or_keyword_type | type_specifier)+
+            attribute_specifier_sequence? abstract_declarator?
+        ]],
+        ['=enumerator'] = [[
+            identifier attribute_specifier_sequence? ("=" constant_expression)?
+        ]],
         ['=_struct_declarator_list'] = [[ member_declarator_list ]],
         ['=storage_class_specifier'] = [[
             "typedef" | "extern" | "static" | "thread_local" | "_Thread_local"
@@ -199,6 +358,8 @@ return assert(require('lexogram.grammar')({
             (
                 identifier enum_type_specifier?+ _enum_body?
                 | enum_type_specifier? _enum_body
+                | attribute_specifier_sequence identifier?
+                  enum_type_specifier? _enum_body
             )
         ]],
         ['=initializer'] = [[ assignment_expression | braced_initializer ]],
@@ -211,14 +372,20 @@ return assert(require('lexogram.grammar')({
         ]],
         ['=_function_rest'] = [[
             _keyword_specifier _function_rest
+            | attribute_specifier_sequence declarator compound_statement
             | (
                 (declarator compound_statement)
                 / (type_specifier _function_rest)
             )
         ]],
-        ['=statement'] = [[ labeled_statement | unlabeled_statement ]],
+        -- two tokens do not tell a label with attributes from a statement
+        -- with them, so a label is tried first
+        ['=statement'] = [[ labeled_statement / unlabeled_statement ]],
         ['=labeled_statement'] = [[ label statement ]],
-        ['=block_item'] = [[ declaration / (unlabeled_statement | label) ]],
+        ['=expression_statement'] = [[
+            expression? ";" | attribute_specifier_sequence expression ";"
+        ]],
+        ['=block_item'] = [[ declaration / label / unlabeled_statement ]],
         ['=_primary_expression'] = [[
             identifier | number | character_constant | _strings
             | "true" | "false" | "nullptr"

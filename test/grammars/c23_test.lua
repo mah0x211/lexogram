@@ -120,6 +120,12 @@ function testcase.grammar_extends_c11_with_the_rules_of_c23()
     end
     -- rule names are a public contract with consumers
     assert.equal(added, {
+        'attribute',
+        'attribute_argument_clause',
+        'attribute_declaration',
+        'attribute_list',
+        'attribute_specifier',
+        'attribute_specifier_sequence',
         'braced_initializer',
         'enum_type_specifier',
         'label',
@@ -272,6 +278,70 @@ function testcase.labels_may_end_a_block_and_precede_declarations()
                      'postfix_expression(y))) ;))))))))')
 end
 
+-- a line with each sequence of one attribute without arguments, [[name]],
+-- written as @name
+local function short(line)
+    return (line:gsub('attribute_specifier_sequence%(attribute_specifier%(' ..
+                          '%[ %[ attribute_list%(attribute%(([%w_]+)%)%) ' ..
+                          '%] %]%)%)', '@%1'))
+end
+
+function testcase.attributes_appertain_where_c23_places_them()
+    local lines = externals(table.concat({
+        '[[deprecated]] int a [[maybe_unused]], *[[x]] p;',
+        'struct [[x]] S { [[y]] int m : 3; };',
+        'enum [[x]] E { A [[y]] = 1 };',
+        'void f([[x]] int, int [[y]]) [[z]];',
+        '[[a::b(1, (2), [3], {4}, if)]];',
+    }, '\n'))
+    for i, line in ipairs(lines) do
+        lines[i] = short(line)
+    end
+    assert.equal(lines, {
+        'declaration(@deprecated type_specifier(int) init_declarator_list(' ..
+            'init_declarator(declarator(direct_declarator(' ..
+            'a @maybe_unused))) , init_declarator(declarator(pointer(* @x) ' ..
+            'direct_declarator(p)))) ;)',
+        'declaration(type_specifier(struct_or_union_specifier(struct @x S { ' ..
+            'member_declaration(@y type_specifier(int) ' ..
+            'member_declarator_list(member_declarator(declarator(' ..
+            'direct_declarator(m)) : constant_expression(' ..
+            'postfix_expression(3)))) ;) })) ;)',
+        'declaration(type_specifier(enum_specifier(enum @x E { ' ..
+            'enumerator(A @y = constant_expression(postfix_expression(1))) ' ..
+            '})) ;)',
+        'declaration(type_specifier(void) init_declarator_list(' ..
+            'init_declarator(declarator(direct_declarator(f function_suffix(' ..
+            '( parameter_type_list(parameter_declaration(@x ' ..
+            'type_specifier(int)) , parameter_declaration(' ..
+            'type_specifier(int) @y)) ) @z))))) ;)',
+        -- the arguments are any tokens with balanced brackets, keywords
+        -- among them
+        'declaration(attribute_declaration(attribute_specifier_sequence(' ..
+            'attribute_specifier([ [ attribute_list(attribute(a :: b ' ..
+            'attribute_argument_clause(( 1 , ( 2 ) , [ 3 ] , { 4 } , if ' ..
+            ')))) ] ])) ;))',
+    })
+    -- a label, a statement and an attribute declaration with attributes
+    local block = items('[[x]] l: [[y]] if (1) {} [[z]] return; [[w]];')
+    for i, line in ipairs(block) do
+        block[i] = short(line)
+    end
+    assert.equal(block, {
+        'label(@x l :)',
+        'unlabeled_statement(@y primary_block(selection_statement(if ( ' ..
+            'expression(assignment_expression(postfix_expression(1))) ) ' ..
+            'statement(unlabeled_statement(primary_block(' ..
+            'compound_statement({ })))))))',
+        'unlabeled_statement(@z jump_statement(return ;))',
+        'declaration(attribute_declaration(@w ;))',
+    })
+    -- a declaration with attributes before its specifiers has declarators,
+    -- and an enumeration without a body has no attributes
+    assert.equal(failure('[[x]] int;').code, 'syntax_error')
+    assert.equal(failure('enum [[x]] E e;').code, 'syntax_error')
+end
+
 -- the source of a sample file
 local function sample(name)
     local f = assert(io.open(name, 'rb'))
@@ -281,22 +351,29 @@ local function sample(name)
 end
 
 function testcase.samples_parse()
-    -- a sample of the forms of C23, accepted by clang -std=c23 -pedantic
-    local source = sample('c23/sample.c')
-    -- parsing takes long under luacov's line hook
-    local result = without_hook(parse, source)
-    local texts = {}
-    local function walk(nodes)
-        for _, node in ipairs(nodes) do
-            if node.children then
-                walk(node.children)
-            else
-                texts[#texts + 1] = node.text
+    -- samples of the forms of C23 and of its attributes, accepted by clang
+    -- -std=c23 -pedantic (the attributes with -Wno-unknown-attributes)
+    for _, name in ipairs({
+        'c23/sample.c',
+        'c23/attributes.c',
+    }) do
+        local source = sample(name)
+        -- parsing takes long under luacov's line hook
+        local result = without_hook(parse, source)
+        local texts = {}
+        local function walk(nodes)
+            for _, node in ipairs(nodes) do
+                if node.children then
+                    walk(node.children)
+                else
+                    texts[#texts + 1] = node.text
+                end
             end
         end
+        walk(events.tree(result))
+        assert.equal(table.concat(texts), source)
     end
-    walk(events.tree(result))
-    assert.equal(table.concat(texts), source)
+    local source = sample('c23/sample.c')
     -- the sample of C11 parses, and c23_macro reads that of C23 as c23
     without_hook(parse, sample('c11/sample.c'))
     assert.equal(without_hook(unit, source, 'lexogram:c23_macro'),
