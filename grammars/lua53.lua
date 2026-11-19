@@ -115,10 +115,7 @@ return assert(require('lexogram.grammar')({
     ['++tokens'] = {
         -- the hexadecimal digits of a code point up to 10FFFF, after the
         -- leading zeros
-        _code_point = [[
-            HEXDIGIT HEXDIGIT? HEXDIGIT? HEXDIGIT? HEXDIGIT?
-            | "10" HEXDIGIT HEXDIGIT HEXDIGIT HEXDIGIT
-        ]],
+        _code_point = [[ HEXDIGIT{1,5} | "10" HEXDIGIT{4} ]],
     },
     tokens = {
         -- a line break is \r\n, \n\r, \n or \r, as the lexer reads it
@@ -126,7 +123,7 @@ return assert(require('lexogram.grammar')({
             "\\" (
                 [abfnrtv\\\"']
                 | "\r\n" | "\n\r" | "\n" | "\r"
-                | "x" HEXDIGIT HEXDIGIT
+                | "x" HEXDIGIT{2}
                 | _decimal_escape
                 | "z" [ \t\r\n\x0B\x0C]*
                 | "u{" "0"* _code_point "}"

@@ -195,17 +195,22 @@ function testcase.tokens_of_lua54()
         '=:=',
         'string:"\\u{7FFFFFFF}\\u{0000110000}"',
     })
-    -- a numeral that touches a letter is no number, as in the lexer of
-    -- Lua 5.4, nor is a \u escape of 2^31
+    -- a numeral that touches a letter is an invalid number, as in the lexer
+    -- of Lua 5.4 (malformed number)
     for _, source in ipairs({
         'x = 3print(1)',
-        'x = "\\u{80000000}"',
         'x = 0x1p',
     }) do
         local result, err = lexogram.parse(compiled(), source)
         assert.is_nil(result)
-        assert.equal(err.code, 'syntax_error')
+        assert.equal(err.code, 'invalid_token')
+        assert.equal(err.pos, 5)
+        assert.equal(err.message, 'invalid number')
     end
+    -- a \u escape of 2^31 is no string
+    local result, err = lexogram.parse(compiled(), 'x = "\\u{80000000}"')
+    assert.is_nil(result)
+    assert.equal(err.code, 'syntax_error')
 end
 
 function testcase.other_rules_are_those_of_lua53()

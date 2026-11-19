@@ -49,9 +49,8 @@
 -- One token and one fragment change; the others are those of lua53.
 --
 --   number        the lexer reads one letter or "_" more after the run of
---                 lua53 and rejects it as a malformed number, so every
---                 number is not followed by (?![0-9A-Za-z_.]): 3print is
---                 no number either
+--                 lua53, which makes it an invalid number: 3print is no
+--                 number either
 --   _code_point   the digits of a value below 2^31 (\u{7FFFFFFF}; Lua 5.4
 --                 checks the value: \u{80000000} is an error)
 --
@@ -83,23 +82,24 @@ return assert(require('lexogram.grammar')({
     name = 'lua54',
     version = '5.4.8-1',
     tokens = {
-        -- the lexer reads hexadecimal digits, dots, exponent marks with
-        -- their signs and one letter or "_" more, and rejects the whole run
-        -- unless it is one number
-        ['=number'] = [[
-            (_integer ("." DIGIT*)? | "." _integer) _exponent?
-              (?![0-9A-Za-z_.])
-            | "0" ("x" | "X") (HEXDIGIT+ ("." HEXDIGIT*)? | "." HEXDIGIT+)
-              (("p" | "P") ("+" | "-")? _digits)? (?![0-9A-Za-z_.])
-        ]],
+        -- the run that the lexer reads: that of lua53 and one letter or "_"
+        -- more; then the forms of a number
+        ['=number'] = {
+            [[
+                (
+                    "."? "0" [xX] ([pP] ("+" | "-")? | [0-9A-Fa-f.])*
+                    | (DIGIT | "." DIGIT) ([eE] ("+" | "-")? | [0-9A-Fa-f.])*
+                ) [A-Za-z_]?
+            ]],
+            [[
+                _decimal _exponent?
+                | "0" [xX] (HEXDIGIT+ ("." HEXDIGIT*)? | "." HEXDIGIT+)
+                  ([pP] ("+" | "-")? _digits)?
+            ]],
+        },
         -- the hexadecimal digits of a value below 2^31, after the leading
         -- zeros
-        ['=_code_point'] = [[
-            HEXDIGIT HEXDIGIT? HEXDIGIT? HEXDIGIT? HEXDIGIT? HEXDIGIT?
-            HEXDIGIT?
-            | [0-7] HEXDIGIT HEXDIGIT HEXDIGIT HEXDIGIT HEXDIGIT HEXDIGIT
-              HEXDIGIT
-        ]],
+        ['=_code_point'] = [[ HEXDIGIT{1,7} | [0-7] HEXDIGIT{7} ]],
     },
     ['++rules'] = {
         attnamelist = [[ name attrib? ("," name attrib?)* ]],

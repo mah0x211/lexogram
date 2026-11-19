@@ -58,16 +58,14 @@
 -- are fragments of the number and string patterns, not tokens.
 --
 --   name               [A-Za-z_][A-Za-z0-9_]*
---   number             3, 3.0, 3., .5, 314.16e-2, 0x56, 0x1p4: _decimal,
---                      _decimal _exponent, or "0x" hexadecimal digits with
---                      an optional "p" and decimal digits, as strtod reads
---                      them; the lexer reads digits and dots, an exponent
---                      mark with its sign, then letters, digits and "_",
---                      and rejects the whole run unless it is one number,
---                      so a number is not followed by what the lexer would
---                      read on: (?![0-9A-Za-z_.]), or (?![0-9A-Za-z_]) after
---                      an exponent or a hexadecimal number (3e, 1..2, 3print
---                      and 0x1p+4 are no numbers; 1e5..x is 1e5 .. x)
+--   number             3, 3.0, 3., .5, 314.16e-2, 0x56, 0x1p4, in two
+--                      patterns: the run that the lexer reads (digits and
+--                      dots, an exponent mark with its sign, then letters,
+--                      digits and "_"), and the forms that strtod must read
+--                      from all of it: _decimal _exponent?, or "0x"
+--                      hexadecimal digits with an optional "p" and decimal
+--                      digits; a run of another form is an invalid number
+--                      (3e, 1..2, 3print and 0x1p+4; 1e5..x is 1e5 .. x)
 --   string             "..." and '...' with _escape; a line break without a
 --                      backslash cannot be inside it
 --   comment            "--" and the rest of the line
@@ -75,7 +73,7 @@
 --                      and form feed
 --   _decimal           fragment: _digits ("." DIGIT*)? | "." _digits
 --   _digits            fragment: DIGIT+
---   _exponent          fragment: ("e" | "E") ("+" | "-")? _digits
+--   _exponent          fragment: [eE] ("+" | "-")? _digits
 --   _escape            fragment: a backslash and a line break (\r\n, \n\r,
 --                      \n or \r), any other byte that is no digit (\n, \\,
 --                      \q), or _decimal_escape
@@ -288,19 +286,18 @@ return assert(require('lexogram.grammar')({
     start = 'chunk',
     tokens = {
         name = [[ (ALPHA | "_") (ALPHA | DIGIT | "_")* ]],
-        -- 3  3.0  3.  .5  314.16e-2  0x56  0x1p4; the lexer reads digits and
-        -- dots, an exponent mark with its sign, then letters, digits and
-        -- "_", and rejects the whole run unless strtod reads all of it: a
-        -- number is not followed by what the lexer would read on (an
-        -- exponent ends the dots)
-        number = [[
-            _decimal (?![0-9A-Za-z_.])
-            | _decimal _exponent (?![0-9A-Za-z_])
-            | "0" ("x" | "X") HEXDIGIT+ (("p" | "P") _digits)? (?![0-9A-Za-z_])
-        ]],
+        -- 3  3.0  3.  .5  314.16e-2  0x56  0x1p4; the run that the lexer
+        -- reads (an exponent ends the dots), then the forms of a number that
+        -- strtod must read from all of it
+        number = {
+            [[
+                (DIGIT | "." DIGIT) [0-9.]* ([eE] ("+" | "-")?)? [0-9A-Za-z_]*
+            ]],
+            [[ _decimal _exponent? | "0" [xX] HEXDIGIT+ ([pP] _digits)? ]],
+        },
         _decimal = [[ _digits ("." DIGIT*)? | "." _digits ]],
         _digits = [[ DIGIT+ ]],
-        _exponent = [[ ("e" | "E") ("+" | "-")? _digits ]],
+        _exponent = [[ [eE] ("+" | "-")? _digits ]],
         -- a line break without a backslash cannot be inside it, so the
         -- quote of an unclosed string is INVALID
         string = [[
@@ -312,8 +309,7 @@ return assert(require('lexogram.grammar')({
         _escape = [[ "\\" ("\r\n" | "\n\r" | [^0-9] | _decimal_escape) ]],
         -- at most three digits, read as many as there are, up to 255
         _decimal_escape = [[
-            DIGIT (?!DIGIT) | DIGIT DIGIT (?!DIGIT)
-            | [01] DIGIT DIGIT | "2" [0-4] DIGIT | "25" [0-5]
+            DIGIT{1,2} (?!DIGIT) | [01] DIGIT{2} | "2" [0-4] DIGIT | "25" [0-5]
         ]],
         space = [[ [ \t\r\n\x0B\x0C]+ ]],
         comment = [[ "--" [^\n\r]* ]],

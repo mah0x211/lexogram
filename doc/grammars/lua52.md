@@ -32,14 +32,13 @@ The version is `5.2.4-1`: the release of Lua 5.2 that the grammar was checked ag
 
 ## tokens
 
-Three tokens and the fragment `_escape` change, `_integer` replaces `_decimal`, and the other tokens are those of [`lua51`](lua51.md#tokens).
+Three tokens and the fragment `_escape` change, and the other tokens are those of [`lua51`](lua51.md#tokens).
 
 | Token | Lua 5.2 |
 |---|---|
-| `number` | A hexadecimal number may also have a fractional part and a binary exponent: `0x1.8p3`, `0xA.Fp-2`, `0x.8`, `0X1P+4`. The lexer of Lua 5.2 reads hexadecimal digits and dots with exponent marks (`e` or `E`, `p` or `P` after `0x`) and their signs, and rejects the whole run unless it is one number; so a decimal number is not followed by `(?![0-9A-Fa-f.])` and a hexadecimal one by `(?![0-9A-Fa-fPp.])`. `3e`, `1..2`, `1e5..x`, `0x` and `0x1p` are no numbers; `3print` is the number `3` and the name `print`, as in Lua 5.2 |
+| `number` | A hexadecimal number may also have a fractional part and a binary exponent: `0x1.8p3`, `0xA.Fp-2`, `0x.8`, `0X1P+4`. The first pattern is the run that the lexer of Lua 5.2 reads: hexadecimal digits and dots with exponent marks (`e` or `E`, `p` or `P` after a first `0x`, also after a dot) and their signs. The second is the forms of a number, as in `lua51` with a hexadecimal fraction and exponent. A run of another form is an `invalid_token` error: `3e`, `1..2`, `1e5..x`, `0x`, `0x1p` and `.0x`. `3print` is the number `3` and the name `print`, as in Lua 5.2 |
 | `string` | A backslash may be followed only by an escape of Lua 5.2 (`_escape`); any other escape, such as `\q`, is an error, as in the lexer of Lua 5.2 |
 | `_escape` | Fragment: `\a \b \f \n \r \t \v \\ \" \'`, a backslash and a line break (`\r\n`, `\n\r`, `\n` or `\r`), `\xXX` (exactly two hexadecimal digits), `_decimal_escape` of [`lua51`](lua51.md#tokens) (up to three digits, up to 255), and `\z`, which skips the white space and line breaks after it |
-| `_integer` | Fragment: the digits of a decimal number, `"0" (?![xX]) DIGIT* \| [1-9] DIGIT*`: a first `0` followed by `x` or `X` starts a hexadecimal number instead, also after a dot (`.0x` is no number) |
 | `long_string` | `nest` is removed: a `[[` inside a long bracket of level 0 is ordinary text. `long_comment` reads its body as a `long_string`, so a `[[` inside `--[[ ... ]]` is ordinary text too |
 | `shebang` | `lua52_shebang` only: a byte order mark, a line that starts with `#`, or a byte order mark and such a line (a leading token, see `leading`). The token keeps the name of `lua51_shebang`, although it may be or begin with a byte order mark: the file loader of Lua 5.2 removes a byte order mark before it looks for the `#` line. For the operating system, a byte order mark before `#!` makes the shebang line unusable; Lua reads such a file all the same |
 
