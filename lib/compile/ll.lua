@@ -410,29 +410,117 @@ local function compute_first(a, k)
 end
 
 --- compute_follow computes FOLLOW_k of every rule.
+---
+--- A reference to B in the rule A adds to FOLLOW_k(B) what walk passes to
+--- it with FOLLOW_k(A) as the continuation of A: R . F, with R what walk
+--- passes with the empty string instead and F = FOLLOW_k(A). The strings
+--- of a FOLLOW_k set are complete (k terminals, or ending the input), and
+--- for such an F that is not empty, walk concatenates from the right to
+--- the same set as R . F; for an empty F it passes R0, what walk passes
+--- with the empty set, which is within R . F for any other F. So R0 is
+--- added at the start, the complete strings of R when F gets its first
+--- string, and then for each string y added to F: y when R has the empty
+--- string, and x followed by the first terminal of y for each string x of
+--- one terminal in R (k = 2). Only the strings added to a set are passed
+--- on, instead of walking every rule again until no set changes.
 --- @param a table analysis
 --- @param k integer
 --- @return table rule -> set
 local function compute_follow(a, k)
+    local first_sets = a.first_sets[k]
     local sets = {}
     for _, name in ipairs(a.names) do
         sets[name] = {}
     end
-    -- the end of input follows start
-    sets[a.start][single(0, k)] = true
-    local changed = true
-    local function visit(node, cont)
-        if node.type == 'ref' and not a.terminal(node) and
-            union(sets[node.name], cont) > 0 then
-            changed = true
+    -- the strings added to each rule that are not passed on yet, and the
+    -- rules that have them, in order
+    local pending, queue = {}, {}
+    local function add(name, y)
+        local s = sets[name]
+        if not s[y] then
+            s[y] = true
+            local p = pending[name]
+            if not p then
+                p = {}
+                pending[name] = p
+                queue[#queue + 1] = name
+            end
+            p[#p + 1] = y
         end
     end
-    while changed do
-        changed = false
-        for _, name in ipairs(a.names) do
-            local cont = {}
-            union(cont, sets[name])
-            walk_node(a, a.rules[name], k, cont, visit, a.first_sets[k])
+
+    -- each reference to a rule in rule name: { target, complete, ones,
+    -- empty } from R (see above)
+    local edges = {}
+    for _, name in ipairs(a.names) do
+        local list = {}
+        edges[name] = list
+        walk_node(a, a.rules[name], k, {
+            [EPS] = true,
+        }, function(node, cont)
+            if node.type == 'ref' and not a.terminal(node) then
+                local e = {
+                    target = node.name,
+                    complete = {},
+                    ones = {},
+                    empty = false,
+                }
+                for x in next, cont do
+                    if x == EPS then
+                        e.empty = true
+                    elseif k == 1 or x == 0 or x % BASE ~= 0 then
+                        e.complete[#e.complete + 1] = x
+                    else
+                        e.ones[#e.ones + 1] = x
+                    end
+                end
+                list[#list + 1] = e
+            end
+        end, first_sets)
+    end
+    -- R0 of each reference
+    for _, name in ipairs(a.names) do
+        walk_node(a, a.rules[name], k, {}, function(node, cont)
+            if node.type == 'ref' and not a.terminal(node) then
+                for y in next, cont do
+                    add(node.name, y)
+                end
+            end
+        end, first_sets)
+    end
+    -- the end of input follows start
+    add(a.start, single(0, k))
+
+    local started = {}
+    local i = 1
+    while i <= #queue do
+        local name = queue[i]
+        i = i + 1
+        local added = pending[name]
+        pending[name] = nil
+        local list = edges[name]
+        if not started[name] then
+            started[name] = true
+            for _, e in ipairs(list) do
+                for _, x in ipairs(e.complete) do
+                    add(e.target, x)
+                end
+            end
+        end
+        for _, e in ipairs(list) do
+            local target, ones = e.target, e.ones
+            for _, y in ipairs(added) do
+                if e.empty then
+                    add(target, y)
+                end
+                if #ones > 0 then
+                    -- the first terminal of y (k = 2 keys)
+                    local h = floor(y / BASE) + 1
+                    for _, x in ipairs(ones) do
+                        add(target, x + h)
+                    end
+                end
+            end
         end
     end
     return sets
