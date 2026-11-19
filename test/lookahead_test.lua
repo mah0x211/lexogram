@@ -46,6 +46,11 @@ local function lex(compiled, source, input)
     end
 end
 
+-- what input keeps for the predicates of compiled (see lexogram.tokenizer)
+local function cache_of(input, compiled)
+    return input.caches[compiled.lexer.predicates]
+end
+
 -- the codes of the error diagnostics of fields
 local function error_codes(fields)
     local codes = {}
@@ -112,10 +117,10 @@ function testcase.lookaheads_without_a_bound_are_computed_once_per_input()
     })
     -- the values of the whole input were computed once, and are kept in
     -- the input, which holds its source
-    local values = input.values[1]
+    local values = cache_of(input, compiled).values[1]
     assert.equal(#values, #'aaab' + 1)
     lex(compiled, 'aaab', input)
-    assert.rawequal(input.values[1], values)
+    assert.rawequal(cache_of(input, compiled).values[1], values)
     assert.equal(input.source, 'aaab')
     assert.equal(lex(compiled, 'aaa', lexogram.input('aaa')), {
         'x:a',
@@ -173,8 +178,8 @@ function testcase.lookaheads_without_a_bound_are_evaluated_where_needed()
     local input = lexogram.input(source)
     assert.equal(lex(compiled, source, input), tokens)
     for _, p in ipairs(unbounded_predicates(compiled)) do
-        assert.is_nil(input.values[p])
-        assert.less(input.read[p], #source)
+        assert.is_nil(cache_of(input, compiled).values[p])
+        assert.less(cache_of(input, compiled).read[p], #source)
     end
 end
 
@@ -199,9 +204,33 @@ function testcase.lookaheads_without_a_bound_are_computed_when_they_read_much()
     local input = lexogram.input(source)
     assert.equal(lex(compiled, source, input), tokens)
     for _, p in ipairs(unbounded_predicates(compiled)) do
-        assert.equal(#input.values[p], #source + 1)
-        assert.less_or_equal(input.read[p], #source + 1)
+        assert.equal(#cache_of(input, compiled).values[p], #source + 1)
+        assert.less_or_equal(cache_of(input, compiled).read[p], #source + 1)
     end
+end
+
+function testcase.an_input_keeps_lookaheads_apart_for_each_compiled_object()
+    -- the predicates of both have the same numbers
+    local function compiled_with(far)
+        return compiled_of({
+            tokens = {
+                unit = '(?!"a"* "' .. far .. '") "a"',
+                b = '"b"',
+                z = '"z"',
+            },
+            rules = {
+                chunk = '(unit | b | z)*',
+            },
+        })
+    end
+    local before, after = compiled_with('z'), compiled_with('b')
+    local source = 'aaaaaaaab'
+    local input = lexogram.input(source)
+    assert.equal(lex(before, source, input), lex(before, source))
+    -- the values computed for before are not those of after
+    assert.equal(lex(after, source, input), lex(after, source))
+    assert.equal(lex(after, source, input)[1], 'INVALID:a')
+    assert.not_rawequal(cache_of(input, after), cache_of(input, before))
 end
 
 function testcase.lookaheads_at_the_start_and_nested_without_a_bound()

@@ -57,7 +57,8 @@
 -- input for that call. An input holds its source, so the values kept in it
 -- always belong to the string tokenized (comparing the source of a call
 -- with a kept one would read both on Lua 5.5, whose comparison of long
--- strings has no shortcut for the same string).
+-- strings has no shortcut for the same string), and keeps them apart for
+-- each compiled object, whose predicates have their own numbers.
 local type = type
 local setmetatable = setmetatable
 local getmetatable = getmetatable
@@ -71,6 +72,12 @@ local unpack = table.unpack or unpack
 
 -- Metatable of an input (see input), which marks it.
 local INPUT = {}
+
+-- Metatable of the caches of an input, whose keys are the predicates of
+-- compiled objects.
+local WEAK_KEYS = {
+    __mode = 'k',
+}
 
 -- Powers of two for valuations.
 local POW = {}
@@ -164,7 +171,8 @@ end
 --- @param source string
 --- @param pos integer
 --- @param len integer
---- @param state table? input of input(), nil for a plain string
+--- @param state table? the cache of an input for the predicates, nil for a
+--- plain string
 --- @return boolean
 function holds(predicates, p, source, pos, len, state)
     local entry = predicates[p]
@@ -602,6 +610,20 @@ local function tokenize(compiled, source, pos, mode)
     end
     local lexer = compiled.lexer
     local checks = lexer.checks
+    if state then
+        -- what an input keeps belongs to the predicates of one compiled
+        -- object: another one numbers its predicates anew
+        local predicates = lexer.predicates
+        local cache = predicates and state.caches[predicates]
+        if predicates and not cache then
+            cache = {
+                values = {},
+                read = {},
+            }
+            state.caches[predicates] = cache
+        end
+        state = cache
+    end
     -- leading tokens are tried at the start of input only, before the rest
     local leading = pos == 1 and lexer.leading
     if leading then
@@ -642,8 +664,9 @@ local function tokenize(compiled, source, pos, mode)
 end
 
 --- input returns an input of source for repeated calls of tokenize on it:
---- it holds source, the bytes that the lookaheads without a bound have
---- read on it and the values computed for it.
+--- it holds source and, for each compiled object it is used with, the
+--- bytes that the lookaheads without a bound have read on it and the
+--- values computed for it.
 --- @param source string
 --- @return table
 local function input(source)
@@ -652,10 +675,11 @@ local function input(source)
     end
     return setmetatable({
         source = source,
-        values = {},
-        -- the bytes read by the forward scans of each predicate without a
-        -- bound (see holds)
-        read = {},
+        -- predicates of a compiled object -> { values, read }: the values
+        -- computed for the whole input and the bytes read by the forward
+        -- scans of each predicate without a bound (see holds); a compiled
+        -- object that is no longer used takes its entry with it
+        caches = setmetatable({}, WEAK_KEYS),
     }, INPUT)
 end
 
