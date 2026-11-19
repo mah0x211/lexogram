@@ -49,7 +49,10 @@
 -- A backtrack point (TRY) saves the event count, the start of the first
 -- raw token not yet written, the call stack depth and the last valid
 -- token; rewinding drops the events after it, empties the lookahead and
--- tokenizes again from the saved position.
+-- tokenizes again from the saved position. Each failure is noted before
+-- rewinding: a syntax error is reported at the furthest token where a
+-- failure happened, in a trial or not, with the kinds expected by all the
+-- failures there.
 --
 -- Error recovery is not implemented yet: the first syntax error, a
 -- delimited token that is unterminated or has a nested open forbidden by
@@ -249,6 +252,12 @@ local function parse(compiled, source)
     local exp = {}
     local nexp = 0
 
+    -- the furthest failure so far, in a trial or not: the start of its
+    -- next token (0 before any), that token's kind and the sources of the
+    -- kinds expected there (see note)
+    local far_pos, far_actual = 0, nil
+    local far_exp, far_nexp = {}, 0
+
     --- read appends the next raw token to the queue; false at the end of
     --- input or after an erroneous delimited token.
     local function read()
@@ -388,9 +397,29 @@ local function parse(compiled, source)
         exp[nexp] = src
     end
 
+    --- note keeps the failure at the next token if it is the furthest one
+    --- so far, or adds what it expected to the furthest one at the same
+    --- position.
+    local function note()
+        local t, i = peek(1)
+        local pos = i and qs[i] or len + 1
+        if pos > far_pos then
+            far_pos, far_actual, far_nexp = pos, t, 0
+        elseif pos < far_pos then
+            return
+        end
+        for j = 1, nexp do
+            far_nexp = far_nexp + 1
+            far_exp[far_nexp] = exp[j]
+        end
+    end
+
     --- fail rewinds to the innermost backtrack point and returns its resume
-    --- address, or returns nil when there is none.
+    --- address, or returns nil when there is none. The failure is noted
+    --- first, so that the error reported is the furthest one in the input,
+    --- of the alternatives tried or of the last one.
     local function fail()
+        note()
         if ntry == 0 then
             return nil
         end
@@ -509,10 +538,11 @@ local function parse(compiled, source)
             break
         end
         if not pc then
-            local t, i = peek(1)
-            -- a contextual keyword that is not expected is its base kind
-            err = syntax_error(kinds, i and qs[i] or len + 1, base_of[t] or t,
-                               expected_kinds(exp, nexp))
+            -- the furthest failure (fail has noted the last one); a
+            -- contextual keyword that is not expected is its base kind
+            err = syntax_error(kinds, far_pos,
+                               base_of[far_actual] or far_actual,
+                               expected_kinds(far_exp, far_nexp))
             break
         end
     end
