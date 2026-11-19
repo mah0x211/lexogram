@@ -135,10 +135,10 @@ The numbers and the escapes were also compared with `load` of Lua 5.3.6 on 2026-
 
 | Runtime | Load and compile | Tokenize | Parse to the event array |
 |---|---|---|---|
-| Lua 5.1 | 0.40 s | 5.1 MB/s | 2.3 MB/s |
-| Lua 5.4 | 0.32 s | 7.1 MB/s | 3.2 MB/s |
-| Lua 5.5 | 0.32 s | 7.0 MB/s | 3.2 MB/s |
-| LuaJIT 2.1 | 0.23 to 0.26 s | 101 to 104 MB/s | 22 to 25 MB/s |
+| Lua 5.1 | 0.24 s | 5.1 MB/s | 2.3 MB/s |
+| Lua 5.4 | 0.19 s | 7.1 MB/s | 3.2 MB/s |
+| Lua 5.5 | 0.19 s | 7.0 MB/s | 3.2 MB/s |
+| LuaJIT 2.1 | 0.16 to 0.18 s | 101 to 104 MB/s | 22 to 25 MB/s |
 
 ## Changes
 

@@ -232,10 +232,10 @@ The speed of `lua51` on each runtime. `lua bench/tokenize.lua lexogram:lua51` an
 
 | Runtime | Load and compile | Tokenize | Parse to the event array |
 |---|---|---|---|
-| Lua 5.1 | 0.12 s | 5.0 MB/s (1.1 M tokens/s) | 2.3 MB/s (1.0 M events/s) |
-| Lua 5.4 | 0.10 s | 7.1 MB/s | 3.2 MB/s |
-| Lua 5.5 | 0.10 s | 7.0 MB/s | 3.2 MB/s |
-| LuaJIT 2.1 | 0.07 to 0.08 s | 101 to 106 MB/s | 21 to 31 MB/s |
+| Lua 5.1 | 0.07 s | 5.0 MB/s (1.1 M tokens/s) | 2.3 MB/s (1.0 M events/s) |
+| Lua 5.4 | 0.06 s | 7.1 MB/s | 3.2 MB/s |
+| Lua 5.5 | 0.06 s | 7.0 MB/s | 3.2 MB/s |
+| LuaJIT 2.1 | 0.05 s | 101 to 106 MB/s | 21 to 31 MB/s |
 
 ## Changes
 
