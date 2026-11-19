@@ -1,6 +1,6 @@
 # C macro forms
 
-`lexogram:c_macro` is a [mixin](../grammar.md#mixins) for the C grammars: it adds the forms that macros make in C sources before preprocessing, which have no C syntax while the macros are not expanded. `lexogram:c99_macro` is [`lexogram:c99`](c99.md) with it.
+`lexogram:c_macro` is a [mixin](../grammar.md#mixins) for the C grammars: it adds the forms that macros make in C sources before preprocessing, which have no C syntax while the macros are not expanded. `lexogram:c99_macro` is [`lexogram:c99`](c99.md) with it, and `lexogram:c11_macro` is [`lexogram:c11`](c11.md) with it.
 
 ```lua
 local lexogram = require('lexogram')
@@ -32,7 +32,7 @@ It replaces rules that the C grammars define for it, and adds one:
 
 | Rule | In the C grammars | With the mixin |
 |---|---|---|
-| `_struct_declarators` | `struct_declarator_list` | `struct_declarator_list?` |
+| `_struct_declarators` | `struct_declarator_list` (`struct_declarator_list?` in `c11`) | `struct_declarator_list?` |
 | `argument_expression_list` | `assignment_expression ("," assignment_expression)*` | `_argument ("," _argument)*` |
 | `_argument` | (none) | `assignment_expression / type_name` |
 | `_strings` | `string_literal+` | `string_literal++ (identifier _strings?+)?` |
@@ -47,9 +47,18 @@ It replaces rules that the C grammars define for it, and adds one:
 | `name` | `c99_macro` (module `lexogram.grammars.c99_macro`) |
 | `version` | `1999-1`, as `c99` |
 
+## c11_macro
+
+| Field | Value |
+|---|---|
+| `extends` | `lexogram:c11` |
+| `embeds` | `lexogram:c_macro` |
+| `name` | `c11_macro` (module `lexogram.grammars.c11_macro`) |
+| `version` | `2011-1`, as `c11` |
+
 ## Results on real sources
 
-On the C sources of Lua 5.1.5 to 5.5.1 that [`c99`](c99.md#results-on-real-sources) was run on (295 files, 3.36 MB, 2026-11-19), `c99_macro` parses 262 files (88.8%, against 173 with `c99`), and their event arrays cover their sources exactly. The other 33 fail at the first of these forms:
+On the C sources of Lua 5.1.5 to 5.5.1 that [`c99`](c99.md#results-on-real-sources) was run on (295 files, 3.36 MB, 2026-11-19), `c99_macro` parses 262 files (88.8%, against 173 with `c99`), and their event arrays cover their sources exactly; `c11_macro` parses the same files. The other 33 fail at the first of these forms:
 
 | First error | Files | Example |
 |---|---:|---|
@@ -62,17 +71,21 @@ On the C sources of Lua 5.1.5 to 5.5.1 that [`c99`](c99.md#results-on-real-sourc
 
 ## Performance
 
-Measured as for [`c99`](c99.md#performance), on the 51 files of Lua 5.4.8 that `c99_macro` parses, concatenated and repeated to 2.63 MB (2026-11-19). Loading `c99_macro` for the first time checks `c99` too, which it extends; the speed of tokenizing and parsing is that of `c99` on the same input.
+Measured as for [`c99`](c99.md#performance), on the 51 files of Lua 5.4.8 that `c99_macro` parses, concatenated and repeated to 2.63 MB (2026-11-19). Loading a grammar for the first time checks the grammars it extends too (`c99` for `c99_macro`; `c99` and `c11` for `c11_macro`); the speed of tokenizing and parsing is that of the grammar without the mixin on the same input.
 
-| Runtime | Load and compile | Tokenize | Parse to the event array |
-|---|---|---|---|
-| Lua 5.1 | 1.20 s | 4.8 MB/s | 1.3 MB/s |
-| Lua 5.4 | 0.91 s | 6.7 MB/s | 1.8 MB/s |
-| Lua 5.5 | 0.89 s | 6.7 MB/s | 1.8 MB/s |
-| LuaJIT 2.1 | 0.53 to 0.70 s | 93 to 109 MB/s | 13 to 14 MB/s, and about 2.5 MB/s in two of five processes |
+| Runtime | Grammar | Load and compile | Tokenize | Parse to the event array |
+|---|---|---|---|---|
+| Lua 5.1 | `c99_macro` | 1.20 s | 4.8 MB/s | 1.3 MB/s |
+| Lua 5.1 | `c11_macro` | 1.95 s | 4.8 MB/s | 1.3 MB/s |
+| Lua 5.4 | `c99_macro` | 0.91 s | 6.7 MB/s | 1.8 MB/s |
+| Lua 5.4 | `c11_macro` | 1.57 s | 6.8 MB/s | 1.8 MB/s |
+| Lua 5.5 | `c99_macro` | 0.89 s | 6.7 MB/s | 1.8 MB/s |
+| Lua 5.5 | `c11_macro` | 1.53 s | 6.7 MB/s | 1.8 MB/s |
+| LuaJIT 2.1 | `c99_macro` | 0.53 to 0.70 s | 93 to 109 MB/s | 13 to 14 MB/s, and about 2.5 MB/s in two of five processes |
+| LuaJIT 2.1 | `c11_macro` | 0.84 to 1.13 s | 90 to 96 MB/s | 11 to 13 MB/s |
 
 ## Changes
 
 | Version | Change |
 |---|---|
-| `1.0.0` | The first version of `c_macro`, and `c99_macro` `1999-1` (2026-11-19). |
+| `1.0.0` | The first version of `c_macro`, with `c99_macro` `1999-1` and `c11_macro` `2011-1` (2026-11-19). |
