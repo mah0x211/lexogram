@@ -640,3 +640,70 @@ function testcase.embeds_returns_the_names()
         assert.equal(err, 'embeds must be a non-empty array of names')
     end
 end
+
+local embed = require('lexogram.extend').embed
+
+function testcase.embed_applies_mixins_to_a_grammar_without_a_base()
+    local def = base()
+    def.name, def.version = 'root', '1.0.0'
+    def.embeds = {
+        'a',
+    }
+    local grammar, err, warnings = embed(def, {
+        chain('a', {
+            mixin = true,
+            lexogram = '0.0.0',
+            name = 'a',
+            version = '9.9.9',
+            ['++tokens'] = {
+                number = 'DIGIT+',
+                name = '[A-Za-z]+',
+            },
+            ['+leading'] = {
+                'number',
+            },
+        }),
+    })
+
+    assert.is_nil(err)
+    -- a copy of the grammar, with its name, version and lexogram and
+    -- without embeds; a field that the grammar does not have is made, and
+    -- what it has is not added, with a warning
+    local expected = base()
+    expected.name, expected.version = 'root', '1.0.0'
+    expected.tokens.number = 'DIGIT+'
+    expected.leading = {
+        'number',
+    }
+    assert.equal(grammar, expected)
+    assert.equal(warnings, {
+        {
+            severity = 'warning',
+            code = 'already_defined',
+            path = 'tokens.name',
+            message = 'tokens.name already exists; it is not added',
+            source = 'a',
+        },
+    })
+    assert.equal(def.embeds, {
+        'a',
+    })
+    assert.is_nil(def.leading)
+
+    -- the errors name the mixin, and a mixin embedded twice is an error
+    grammar, err = embed(base(), {
+        chain('a', {
+            ['--rules'] = {
+                'none',
+            },
+        }),
+    })
+    assert.is_nil(grammar)
+    assert.equal(err, 'a: rules.none: does not exist')
+    grammar, err = embed(base(), {
+        chain('a', {}),
+        chain('a', {}),
+    })
+    assert.is_nil(grammar)
+    assert.equal(err, 'cannot embed "a" twice')
+end

@@ -786,6 +786,36 @@ function testcase.embeds_applies_the_difference_of_the_grammar_last()
     assert.equal(err, MIXINS .. 'own_adds.lua: leading: already has "shebang"')
 end
 
+function testcase.embeds_applies_mixins_to_a_grammar_without_extends()
+    local grammar, err, warnings = loader.load(MIXINS .. 'no_extends.lua')
+
+    assert.is_nil(err)
+    assert.equal(warnings, {})
+    -- the grammar is a complete table, which the mixin is applied to
+    assert.equal(grammar, {
+        lexogram = '2026.11.15.1',
+        name = 'no_extends',
+        version = '1.0.0',
+        start = 'chunk',
+        tokens = {
+            name = '[a-z]+',
+            shebang = '"#" [^\\n]*',
+        },
+        leading = {
+            'shebang',
+        },
+        skip = {
+            'shebang',
+        },
+        rules = {
+            chunk = 'name*',
+        },
+    })
+    local compiled, diagnostics = require('lexogram').compile(grammar)
+    assert.is_table(compiled)
+    assert.equal(diagnostics, {})
+end
+
 function testcase.embeds_reports_errors()
     local function err_of(name)
         local grammar, err = loader.load(MIXINS .. name .. '.lua')
@@ -803,8 +833,13 @@ function testcase.embeds_reports_errors()
     assert.equal(err_of('extends_mixin'),
                  MIXINS .. 'extends_mixin.lua: cannot extend "shebang": it is' ..
                      ' a mixin (embed it with embeds)')
-    assert.equal(err_of('no_extends'),
-                 MIXINS .. 'no_extends.lua: embeds needs extends')
+    assert.equal(err_of('no_extends_error'),
+                 MIXINS .. 'no_extends_error.lua: ' .. MIXINS ..
+                     'removes.lua: rules.none: does not exist')
+    local through = '": it is already embedded through "'
+    assert.equal(err_of('no_extends_twice'),
+                 MIXINS .. 'no_extends_twice.lua: cannot embed "' .. MIXINS ..
+                     'shebang.lua' .. through .. MIXINS .. 'bom.lua"')
     assert.equal(err_of('bad_embeds'),
                  MIXINS .. 'bad_embeds.lua: embeds must' ..
                      ' be a non-empty array of names')

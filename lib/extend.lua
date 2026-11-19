@@ -44,7 +44,9 @@
 -- A mixin (mixin = true) is a difference table without a base, which
 -- grammars embed (embeds = { names }). The mixins are applied after the
 -- base and before the difference of the grammar itself, in the order they
--- are written; a mixin that extends another mixin is applied after it.
+-- are written; a mixin that extends another mixin is applied after it. A
+-- grammar without a base is a complete table, which the mixins are applied
+-- to in the same order.
 -- Since a mixin is written without knowing the base it is embedded in, an
 -- item or field that it adds and that already exists is not added, with a
 -- warning; a replacement replaces what an earlier mixin wrote (the later
@@ -540,6 +542,32 @@ local function check_duplicates(mixins)
     return nil
 end
 
+--- apply_mixins applies the mixins, the chains of the mixins of embeds,
+--- to the grammar, adding their warnings to warnings, and returns nil, or
+--- an error message that starts with the source of the mixin.
+--- @param grammar table
+--- @param mixins table[][]
+--- @param warnings table[]
+--- @return string? err
+local function apply_mixins(grammar, mixins, warnings)
+    local err = check_duplicates(mixins)
+    if err then
+        return err
+    end
+    for _, chain in ipairs(mixins) do
+        for _, link in ipairs(chain) do
+            err = apply(grammar, difference(link.diff), '', true, {
+                source = link.source,
+                warnings = warnings,
+            })
+            if err then
+                return link.source .. ': ' .. err
+            end
+        end
+    end
+    return nil
+end
+
 --- extend returns a copy of the grammar base with the mixins and then the
 --- difference table diff applied, the warnings of the mixins, or nil and
 --- an error message. Each item of mixins is the chain of a mixin of embeds,
@@ -559,20 +587,9 @@ local function extend(base, diff, mixins)
     grammar.name, grammar.version = nil, nil
     local warnings = {}
     if mixins then
-        local err = check_duplicates(mixins)
+        local err = apply_mixins(grammar, mixins, warnings)
         if err then
             return nil, err
-        end
-        for _, chain in ipairs(mixins) do
-            for _, link in ipairs(chain) do
-                err = apply(grammar, difference(link.diff), '', true, {
-                    source = link.source,
-                    warnings = warnings,
-                })
-                if err then
-                    return nil, link.source .. ': ' .. err
-                end
-            end
         end
     end
     for k in next, COPIED do
@@ -588,8 +605,28 @@ local function extend(base, diff, mixins)
     return grammar, nil, warnings
 end
 
+--- embed returns a copy of the grammar def, which extends no other one,
+--- with the mixins applied (see extend) and without its embeds field, the
+--- warnings of the mixins, or nil and an error message.
+--- @param def table
+--- @param mixins table[][]
+--- @return table? grammar
+--- @return string? err
+--- @return table[]? warnings { severity, code, path, message, source }
+local function embed(def, mixins)
+    local grammar = copy(def, {})
+    grammar.embeds = nil
+    local warnings = {}
+    local err = apply_mixins(grammar, mixins, warnings)
+    if err then
+        return nil, err
+    end
+    return grammar, nil, warnings
+end
+
 return {
     extend = extend,
+    embed = embed,
     validate = validate,
     embeds = embeds,
 }

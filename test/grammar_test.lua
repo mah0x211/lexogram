@@ -436,6 +436,51 @@ function testcase.new_embeds_built_in_mixins()
     end)
 end
 
+function testcase.new_embeds_mixins_in_a_grammar_without_extends()
+    with_mixins(function()
+        local def = base()
+        def.embeds = {
+            'lexogram:hex',
+        }
+        local fn, err, diagnostics = grammar(def)
+
+        assert.is_nil(err)
+        assert.equal(diagnostics, {})
+        -- the mixins are applied to the grammar itself, which keeps its
+        -- name and version and loses its embeds
+        local expected = base()
+        expected.tokens.number = '"0x" HEXDIGIT+ | DIGIT+'
+        expected.rules.chunk = '(name | number)*'
+        assert.equal(fn(), expected)
+
+        -- what a mixin adds and the grammar has is not added, with a
+        -- warning
+        def = base()
+        def.tokens.number = 'DIGIT+'
+        def.rules.chunk = '(name | number)*'
+        def.embeds = {
+            'lexogram:number',
+        }
+        fn, err, diagnostics = grammar(def)
+        assert.is_nil(err)
+        assert.equal(fn(), (function()
+            local g = base()
+            g.tokens.number = 'DIGIT+'
+            g.rules.chunk = '(name | number)*'
+            return g
+        end)())
+        assert.equal(diagnostics, {
+            {
+                severity = 'warning',
+                code = 'already_defined',
+                path = 'tokens.number',
+                message = 'tokens.number already exists; it is not added',
+                source = 'lexogram:number',
+            },
+        })
+    end)
+end
+
 function testcase.new_reports_errors_of_embeds()
     local function err_of(def)
         local fn, err = grammar(def)
@@ -444,11 +489,28 @@ function testcase.new_reports_errors_of_embeds()
     end
 
     with_mixins(function()
+        -- the errors of the mixins of a grammar without extends
         local def = base()
+        def.embeds = {
+            'lexogram:base',
+        }
+        assert.equal(err_of(def),
+                     'cannot embed "lexogram:base": it is not a mixin')
+        def.embeds = {
+            'lexogram:number',
+            'lexogram:hex',
+        }
+        assert.equal(err_of(def), 'cannot embed "lexogram:number": it is' ..
+                         ' already embedded through "lexogram:hex"')
+        def.rules = {
+            other = 'name*',
+        }
+        def.start = 'other'
         def.embeds = {
             'lexogram:number',
         }
-        assert.equal(err_of(def), 'embeds needs extends')
+        assert.equal(err_of(def),
+                     'lexogram:number: rules.chunk:' .. ' does not exist')
         def = {
             extends = 'lexogram:base',
             name = 'derived',

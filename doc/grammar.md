@@ -87,7 +87,7 @@ return assert(require('lexogram.grammar')({
 | `rules` | yes | table | Name → pattern |
 | `recover` | | array of rule names | Rules to recover in after a syntax error (not implemented yet) |
 | `extends` | | grammar name | The grammar this one is a difference of; resolved by `lexogram.load` |
-| `embeds` | | array of mixin names | The [mixins](#mixins) applied after the base; needs `extends` |
+| `embeds` | | array of mixin names | The [mixins](#mixins) applied after the base, or to the grammar itself when it has no `extends` |
 
 An unknown field is an error, so that a field added in a later revision cannot collide with an existing grammar.
 
@@ -352,7 +352,7 @@ return {
 }
 ```
 
-- **Embedding**: `embeds` is a non-empty array of names of mixins (the names of [extends](#extends)). A grammar needs `extends` to embed mixins. The base is merged first, then each mixin in the order of `embeds`, then the difference of the grammar itself.
+- **Embedding**: `embeds` is a non-empty array of names of mixins (the names of [extends](#extends)). In a grammar with `extends`, the base is merged first, then each mixin in the order of `embeds`, then the difference of the grammar itself, which can adjust what the mixins wrote. A grammar without `extends` is a complete table, not a difference, so each mixin is applied to it in the same order.
 - **Extending a mixin**: a mixin may extend another mixin with `extends`, but not a grammar, and it cannot embed. Embedding it applies the mixin it extends first, then its own difference. A grammar cannot extend a mixin, and `lexogram.load`, `lexogram.merge` and `import` reject a mixin, which is no complete grammar.
 - **Marks in a mixin**: a mixin is written without knowing its base, so an item (`+X`) or a field (`++X`) that already exists, in the base or from an earlier mixin, is not added, with an `already_defined` warning. A replacement (`=X`) replaces what an earlier mixin wrote: the later one wins. The other marks work as in a difference of `extends`, and the difference of the grammar itself stays as strict as ever.
 - **Embedding twice**: a mixin that two items of `embeds` bring in is an error, such as `embeds = { 'shebang', 'bom_shebang' }` where `bom_shebang` extends `shebang`: `cannot embed "shebang": it is already embedded through "bom_shebang"`.
