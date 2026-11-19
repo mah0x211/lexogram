@@ -46,13 +46,18 @@
 -- writes it with the base kind. Only tokens of a base kind are compared,
 -- and only those of the length of a keyword read their text.
 --
--- A backtrack point (TRY) saves the event count, the start of the first
--- raw token not yet written, the call stack depth and the last valid
--- token; rewinding drops the events after it, empties the lookahead and
--- tokenizes again from the saved position. Each failure is noted before
--- rewinding: a syntax error is reported at the furthest token where a
--- failure happened, in a trial or not, with the kinds expected by all the
--- failures there.
+-- A backtrack point (TRY) saves the event count, the queue index of the
+-- first raw token not yet written, the call stack depth and the last valid
+-- token; rewinding drops the events after it and moves the head of the
+-- queue back, so that the tokens read are read again from the queue
+-- without tokenizing them again. While a backtrack point is kept the queue
+-- is not emptied, so it holds the tokens read since the outermost one. A
+-- token whose error stops the analysis is the last one read, and a rewind
+-- drops it from the queue, so that it is read again, and its error
+-- reported, only where the analysis reaches it again. Each failure is
+-- noted before rewinding: a syntax error is reported at the furthest token
+-- where a failure happened, in a trial or not, with the kinds expected by
+-- all the failures there.
 --
 -- Error recovery is not implemented yet: the first syntax error, a
 -- delimited token that is unterminated or has a nested open forbidden by
@@ -84,6 +89,9 @@ local JUMP = codegen.JUMP
 local SWITCH = codegen.SWITCH
 local TEST = codegen.TEST
 local TRY = codegen.TRY
+-- the number of tokens written from the head of the queue after which an
+-- outermost backtrack point moves the tokens read ahead to its start
+local COMPACT = 64
 -- codegen.COMMIT is the only other opcode; it is the last branch of the
 -- dispatch below.
 
@@ -248,7 +256,8 @@ local function parse(compiled, source)
     local depth = 0
 
     -- backtrack points
-    local tevents, traw, tdepth, tresume, tstop, ttoken = {}, {}, {}, {}, {}, {}
+    local tevents, tqueue, tdepth, tresume = {}, {}, {}, {}
+    local tstop, ttoken = {}, {}
     local tmax = {}
     local ntry = 0
 
@@ -439,14 +448,18 @@ local function parse(compiled, source)
             return nil
         end
         count = tevents[ntry]
-        raw_pos = traw[ntry]
         depth = tdepth[ntry]
         fmax[depth] = tmax[ntry]
         last_stop, last_token = tstop[ntry], ttoken[ntry]
         local resume = tresume[ntry]
+        qh, next_i = tqueue[ntry], nil
         ntry = ntry - 1
-        qh, qt, next_i = 1, 0, nil
-        failure = nil
+        if failure then
+            -- the erroneous token is the last one read: read it again
+            raw_pos = qs[qt]
+            qt = qt - 1
+            failure = nil
+        end
         nexp = 0
         return resume
     end
@@ -467,8 +480,9 @@ local function parse(compiled, source)
                 emit(TOKEN_EVENT, k, qs[i], qe[i])
                 last_stop, last_token = qe[i], count
                 qh, next_i = i + 1, nil
-                if qh > qt then
-                    -- reuse the queue arrays from the start
+                if qh > qt and ntry == 0 then
+                    -- reuse the queue arrays from the start, when no
+                    -- backtrack point refers to them
                     qh, qt = 1, 0
                 end
                 nexp = 0
@@ -532,9 +546,20 @@ local function parse(compiled, source)
         elseif op == TRY then
             local d = decisions[code[pc + 1]]
             if d.first[(peek(1))] then
+                if ntry == 0 and qh > COMPACT then
+                    -- the outermost backtrack point: move the tokens not
+                    -- yet written to the start of the queue, so that it
+                    -- holds the tokens of one trial at a time
+                    local n = qt - qh + 1
+                    for j = 1, n do
+                        local from = qh + j - 1
+                        qk[j], qs[j], qe[j] = qk[from], qs[from], qe[from]
+                    end
+                    qh, qt, next_i = 1, n, nil
+                end
                 ntry = ntry + 1
                 tevents[ntry] = count
-                traw[ntry] = qh <= qt and qs[qh] or raw_pos
+                tqueue[ntry] = qh
                 tdepth[ntry] = depth
                 tresume[ntry] = code[pc + 2]
                 tstop[ntry], ttoken[ntry] = last_stop, last_token
