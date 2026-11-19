@@ -16,6 +16,7 @@ local result, err = lexogram.parse(compiled, source)
 
 - [The form of a grammar](#the-form-of-a-grammar)
 - [Built-in grammars](#built-in-grammars)
+- [Saving a compiled grammar](#saving-a-compiled-grammar)
 - [Top-level fields](#top-level-fields)
 - [Metadata](#metadata): `lexogram`, `name`, `version`
 - [start](#start)
@@ -87,6 +88,25 @@ f:close()
 ```
 
 The document of each built-in grammar lists its changes, which tells what to bring into a copy.
+
+## Saving a compiled grammar
+
+Loading and compiling a grammar checks it, and the grammars it extends, every time a process starts. To skip that, save the compiled grammar and read it back:
+
+```lua
+local lexogram = require('lexogram')
+-- once, when the grammar changes
+local compiled = assert(lexogram.compile(assert(lexogram.load('c23.lua'))))
+local f = assert(io.open('c23.compiled.lua', 'w'))
+f:write(assert(lexogram.dump(compiled)))
+f:close()
+-- in each process
+f = assert(io.open('c23.compiled.lua'))
+compiled = assert(lexogram.undump(f:read('*a')))
+f:close()
+```
+
+`lexogram.dump(compiled)` returns Lua source text that returns the compiled grammar, the same for the same compiled grammar on every runtime; `lexogram.undump(text)` reads it back, or returns `nil` and an error message. The layout of a compiled grammar may change from one version of lexogram to the next, so the text carries the revision of the layout (`format`), and `undump` rejects text of another revision: compile the grammar again then. `undump` runs the text in an empty environment, which is no security sandbox: read only text that you trust as code.
 
 ## Top-level fields
 

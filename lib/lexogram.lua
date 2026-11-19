@@ -32,6 +32,9 @@
 -- source (see lexogram.analyzer).
 -- merge(pathname) returns the Lua source of the grammar file merged with
 -- the grammars it extends, which extends no grammar (see lexogram.source).
+-- dump(compiled) returns the Lua source of a compiled grammar to save, and
+-- undump(text) reads it back without checking and compiling the grammar
+-- again (see lexogram.dump).
 local type = type
 local error = error
 local analyzer = require('lexogram.analyzer')
@@ -40,6 +43,7 @@ local check = require('lexogram.check')
 local compile = require('lexogram.compile')
 local tokenizer = require('lexogram.tokenizer')
 local write = require('lexogram.source').write
+local dump = require('lexogram.dump')
 
 --- merge loads the grammar file at pathname, merges it with the grammars it
 --- extends and the mixins it embeds, and returns the Lua source text of the
@@ -76,6 +80,8 @@ end
 return {
     load = loader.load,
     merge = merge,
+    dump = dump.dump,
+    undump = dump.undump,
     check = check.check,
     compile = compile.compile,
     tokenize = tokenizer.tokenize,
