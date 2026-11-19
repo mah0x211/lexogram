@@ -84,6 +84,10 @@ end
 --- @return table
 local function concat(s, t, k)
     local out = {}
+    -- for the strings of one terminal in s: the first terminals of the
+    -- strings of t, as the numbers to add to their keys, and whether t has
+    -- the empty string, made once
+    local heads, empty
     for x in next, s do
         if x == EPS then
             for y in next, t do
@@ -93,13 +97,27 @@ local function concat(s, t, k)
             -- complete: length k, or ends the input
             out[x] = true
         else
-            for y in next, t do
-                if y == EPS then
-                    out[x] = true
-                else
-                    -- the first terminal of y (k = 2 keys)
-                    out[x + floor(y / BASE) + 1] = true
+            if not heads then
+                heads, empty = {}, false
+                local seen = {}
+                for y in next, t do
+                    if y == EPS then
+                        empty = true
+                    else
+                        -- the first terminal of y (k = 2 keys)
+                        local h = floor(y / BASE) + 1
+                        if not seen[h] then
+                            seen[h] = true
+                            heads[#heads + 1] = h
+                        end
+                    end
                 end
+            end
+            if empty then
+                out[x] = true
+            end
+            for i = 1, #heads do
+                out[x + heads[i]] = true
             end
         end
     end
@@ -119,17 +137,6 @@ local function union(s, t)
         end
     end
     return added
-end
-
---- count returns the number of strings in s.
---- @param s table
---- @return integer
-local function count(s)
-    local n = 0
-    for _ in next, s do
-        n = n + 1
-    end
-    return n
 end
 
 --- to_array returns the strings of s, except EPS, as a sorted array: kind
@@ -171,13 +178,9 @@ local function star_first(s, k)
     local r = {
         [EPS] = true,
     }
-    while true do
-        local n = count(r)
-        union(r, concat(s, r, k))
-        if count(r) == n then
-            return r
-        end
+    while union(r, concat(s, r, k)) > 0 do
     end
+    return r
 end
 
 --- children returns the child nodes of node that its FIRST depends on.
@@ -251,14 +254,25 @@ local function combine(a, node, res, k, sets)
 end
 
 --- node_first returns FIRST_k of node with the rule sets sets, computed in
---- post-order with an explicit stack.
+--- post-order with an explicit stack. With the final sets of the analysis
+--- (a.first_sets[k], once compute_first has made them), the sets of the
+--- nodes are kept in a.node_sets[k] and computed once; the callers do not
+--- change the sets returned.
 --- @param a table analysis
 --- @param root table
 --- @param k integer
 --- @param sets table rule -> FIRST_k set
 --- @return table
 local function node_first(a, root, k, sets)
-    local res = {}
+    local res = sets == a.first_sets[k] and a.node_sets[k]
+    if res then
+        local s = res[root]
+        if s then
+            return s
+        end
+    else
+        res = {}
+    end
     local stack = {}
     stack[1] = root
     while #stack > 0 do
@@ -326,7 +340,10 @@ local function walk_node(a, root, k, cont, visit, sets)
                     items[i],
                     c,
                 }
-                c = concat(node_first(a, items[i], k, sets), c, k)
+                -- what follows the first item is not needed
+                if i > 1 then
+                    c = concat(node_first(a, items[i], k, sets), c, k)
+                end
             end
         elseif t == 'choice' then
             for i = #node.items, 1, -1 do
@@ -479,7 +496,8 @@ end
 ---   first2, follow2 = rule -> sorted { a } / { a, b } arrays,
 ---   left_recursion = array of cycles (arrays of rule names),
 ---   first_sets, follow_sets = k -> rule -> key set (with EPS), used by
----   first and walk }
+---   first and walk,
+---   node_sets = k -> node -> FIRST_k key set, kept by first and walk }
 local function analyze(rules, start, terminal, aliases)
     local names = {}
     for name in next, rules do
@@ -495,6 +513,11 @@ local function analyze(rules, start, terminal, aliases)
         names = names,
         first_sets = {},
         follow_sets = {},
+        -- k -> node -> FIRST_k set (see node_first)
+        node_sets = {
+            {},
+            {},
+        },
     }
     for k = 1, 2 do
         a.first_sets[k] = compute_first(a, k)

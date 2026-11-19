@@ -174,16 +174,16 @@ The tokens were also compared with `loadstring` of that LuaJIT on 2026-11-18: al
 
 ## Performance
 
-`lua bench/tokenize.lua lexogram:luajit` and `lua bench/parse.lua lexogram:luajit` measure the grammar as for [`lua51`](lua51.md#performance) (best of 5 in one process, CPU time, 2026-11-19, local machine). On LuaJIT the speed differs between processes; the range of five processes is shown, and for parsing of twenty, without the few (one in twenty or so) that parse at 7 to 14 MB/s.
+`lua bench/tokenize.lua lexogram:luajit` and `lua bench/parse.lua lexogram:luajit` measure the grammar as for [`lua51`](lua51.md#performance) (best of 5 in one process, CPU time, 2026-11-19, local machine). On LuaJIT the speed differs between processes; the range of five processes is shown, and for parsing of twenty, without the few (one or two in twenty) that parse at 6 to 14 MB/s.
 
 | Runtime | Compile | Tokenize | Parse to the event array |
 |---|---|---|---|
-| Lua 5.1 | 0.69 s | 4.9 MB/s | 2.1 MB/s |
-| Lua 5.4 | 0.54 s | 6.8 MB/s | 2.9 MB/s |
-| Lua 5.5 | 0.55 s | 6.8 MB/s | 3.0 MB/s |
-| LuaJIT 2.1 | 0.28 to 0.35 s | 99 to 101 MB/s | 22 to 29 MB/s |
+| Lua 5.1 | 0.41 s | 4.6 MB/s | 2.1 MB/s |
+| Lua 5.4 | 0.32 s | 6.6 MB/s | 2.8 MB/s |
+| Lua 5.5 | 0.31 s | 6.6 MB/s | 3.0 MB/s |
+| LuaJIT 2.1 | 0.18 to 0.22 s | 87 to 101 MB/s | 19 to 28 MB/s |
 
-The compilation takes longer than for `lua51` (0.25 s on Lua 5.1): the automata of the tokens are larger (the limits of the numbers, the line number directives and the lookaheads), and the analysis of two tokens ahead has more terminals. Parsing is somewhat slower than for `lua51` (2.3 MB/s on Lua 5.1). The lookahead of `space` after a line break has no bound, but it reads a byte or a few after each line break, so its values are not computed for the whole input (see the cost of lookaheads in [the grammar reference](../grammar.md#lookaheads)).
+The compilation takes longer than for `lua51` (0.12 s on Lua 5.1): the automata of the tokens are larger (the limits of the numbers, the line number directives and the lookaheads), and the analysis of two tokens ahead has more terminals. Parsing is somewhat slower than for `lua51` (2.3 MB/s on Lua 5.1). The lookahead of `space` after a line break has no bound, but it reads a byte or a few after each line break, so its values are not computed for the whole input (see the cost of lookaheads in [the grammar reference](../grammar.md#lookaheads)).
 
 ## Changes
 

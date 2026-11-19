@@ -228,14 +228,14 @@ The numbers and the escapes were also compared with `load` of Lua 5.1.5 on 2026-
 
 ## Performance
 
-The speed of `lua51` on each runtime. `lua bench/tokenize.lua lexogram:lua51` and `lua bench/parse.lua lexogram:lua51` measure the grammar on the library sources, each wrapped in `do ... end` and repeated to 2.24 MB (best of 5 in one process, CPU time, 2026-11-18, local machine). Compile is the time of `lexogram.compile`; loading `lexogram:lua51` for the first time also checks the grammar (see `lexogram.grammar`), which takes about as long. On LuaJIT the speed differs between processes, as the traces that the compiler chooses differ; the range of five processes is shown.
+The speed of `lua51` on each runtime. `lua bench/tokenize.lua lexogram:lua51` and `lua bench/parse.lua lexogram:lua51` measure the grammar on the library sources, each wrapped in `do ... end` and repeated to 2.16 MB (best of 5 in one process, CPU time, 2026-11-19, local machine). Compile is the time of `lexogram.compile`; loading `lexogram:lua51` for the first time also checks the grammar (see `lexogram.grammar`), which takes about as long. On LuaJIT the speed differs between processes, as the traces that the compiler chooses differ; the range of five processes is shown.
 
 | Runtime | Compile | Tokenize | Parse to the event array |
 |---|---|---|---|
-| Lua 5.1 | 0.25 s | 5.0 MB/s (1.1 M tokens/s) | 2.3 MB/s (1.0 M events/s) |
-| Lua 5.4 | 0.19 s | 7.3 MB/s | 3.3 MB/s |
-| Lua 5.5 | 0.20 s | 7.2 MB/s | 3.3 MB/s |
-| LuaJIT 2.1 | 0.10 s | 105 to 110 MB/s | 22 to 31 MB/s |
+| Lua 5.1 | 0.12 s | 5.0 MB/s (1.1 M tokens/s) | 2.3 MB/s (1.0 M events/s) |
+| Lua 5.4 | 0.09 s | 7.1 MB/s | 3.2 MB/s |
+| Lua 5.5 | 0.09 s | 7.0 MB/s | 3.2 MB/s |
+| LuaJIT 2.1 | 0.06 to 0.07 s | 101 to 106 MB/s | 21 to 31 MB/s |
 
 ## Changes
 
