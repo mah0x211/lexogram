@@ -149,6 +149,12 @@ local ipairs = ipairs
 local run_check = require('lexogram.check').run
 local generate = require('lexogram.compile.codegen').generate
 local resolve_version = require('lexogram.version').resolve
+local write = require('lexogram.source').write
+
+-- The grammars checked by lexogram.grammar (the built-in grammars): their
+-- source text (see lexogram.source) -> { compiled, diagnostics }, so that
+-- compiling one does not check it again.
+local CHECKED = {}
 
 -- Category of each definition kind of lexogram.compile.lexer.
 local CATEGORY = {
@@ -159,6 +165,22 @@ local CATEGORY = {
     keyword = 'keyword',
     contextual = 'keyword',
 }
+
+--- copy returns a deep copy of v, a value of a compiled object or of
+--- diagnostics: plain values and tables of them, without metatables,
+--- cycles or tables referenced twice.
+--- @param v any
+--- @return any
+local function copy(v)
+    if type(v) ~= 'table' then
+        return v
+    end
+    local t = {}
+    for k, x in next, v do
+        t[k] = copy(x)
+    end
+    return t
+end
 
 --- copy_array returns a copy of the array t of plain values.
 --- @param t table
@@ -324,11 +346,21 @@ end
 --- compile compiles grammar. It returns nil and the diagnostics of
 --- lexogram.check when there is an error, otherwise the compiled object
 --- and the diagnostics (warnings only). It reuses the token automaton and
---- the lookahead decisions that the check built. It never raises.
+--- the lookahead decisions that the check built. For a grammar of the same
+--- source text as one that lexogram.grammar has checked (see remember), it
+--- returns a copy of the compiled object built then, without checking it
+--- again. It never raises.
 --- @param grammar any
 --- @return table? compiled
 --- @return table[] diagnostics
 local function compile(grammar)
+    if type(grammar) == 'table' then
+        local source = write(grammar, {})
+        local checked = source and CHECKED[source]
+        if checked then
+            return copy(checked.compiled), copy(checked.diagnostics)
+        end
+    end
     local diagnostics, lexer, syntax = run_check(grammar)
     for _, d in ipairs(diagnostics) do
         if d.severity == 'error' then
@@ -338,6 +370,25 @@ local function compile(grammar)
     return build_object(grammar, lexer, syntax), diagnostics
 end
 
+--- remember keeps the compiled object of grammar, whose source text is
+--- source and which lexogram.check has passed with diagnostics (warnings
+--- only), built from the automaton and decisions of that check, so that
+--- compile returns a copy of it for a grammar of the same source text
+--- instead of checking it again. lexogram.grammar calls it for the
+--- grammars it checks.
+--- @param grammar table
+--- @param source string
+--- @param diagnostics table[]
+--- @param lexer table
+--- @param syntax table
+local function remember(grammar, source, diagnostics, lexer, syntax)
+    CHECKED[source] = {
+        compiled = build_object(grammar, lexer, syntax),
+        diagnostics = copy(diagnostics),
+    }
+end
+
 return {
     compile = compile,
+    remember = remember,
 }

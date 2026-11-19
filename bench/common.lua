@@ -9,7 +9,9 @@
 -- library, so the list is explicit and must be updated with new modules).
 -- Each file is wrapped in do ... end, so that the input is one chunk of
 -- Lua, and the files are concatenated and repeated until the input has at
--- least 2 MB. The grammar is compiled once (the compile time is reported), and
+-- least 2 MB. The grammar is loaded and compiled once (both times are
+-- reported: a built-in grammar is checked when it is loaded first, and
+-- compiling it then copies what that check made), and
 -- the measured function runs over the whole input RUNS times; the best run
 -- is reported.
 --
@@ -90,7 +92,7 @@ end
 --- arguments; it exits with status 1 on any error.
 --- @param args string[] the command line arguments
 --- @return table setup { lexogram, compiled, input, grammar_path, files,
---- compile_time }
+--- load_time, compile_time }
 local function setup(args)
     local grammar_path = args[1] or ROOT .. 'bench/grammars/lua51_lexical.lua'
     local files = {}
@@ -103,13 +105,15 @@ local function setup(args)
         end
     end
 
+    local t0 = os.clock()
     local grammar, err = lexogram.load(grammar_path)
     if not grammar then
         fail(err)
     end
-    local t0 = os.clock()
+    local t1 = os.clock()
     local compiled, diagnostics = lexogram.compile(grammar)
-    local compile_time = os.clock() - t0
+    local compile_time = os.clock() - t1
+    local load_time = t1 - t0
     for _, d in ipairs(diagnostics) do
         io.stderr:write(d.severity, ': ', d.path, ': ', d.message, '\n')
     end
@@ -140,6 +144,7 @@ local function setup(args)
         input = table.concat(copies, '\n'),
         grammar_path = grammar_path,
         files = files,
+        load_time = load_time,
         compile_time = compile_time,
     }
 end
@@ -171,6 +176,7 @@ local function report(s)
     print(string.format('runtime   : %s%s', _VERSION,
                         jit and (' (' .. jit.version .. ')') or ''))
     print(string.format('grammar   : %s', s.grammar_path))
+    print(string.format('load      : %.3f s', s.load_time))
     print(string.format('compile   : %.3f s', s.compile_time))
     print(string.format('input     : %d bytes (%.2f MB, %d files)', #s.input,
                         mb, #s.files))
