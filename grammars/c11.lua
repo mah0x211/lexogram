@@ -147,7 +147,7 @@ return assert(require('lexogram.grammar')({
             | type_specifier _struct_rest
             | static_assert_declaration
         ]],
-        ['=_struct_declarators'] = [[ struct_declarator_list? ]],
+        ['=_struct_declarators'] = [[ _struct_declarator_list? ]],
         ['=_term'] = [[
             unary_operator _term | ("++" | "--") _term | sizeof_expression
             | alignof_expression | (cast_expression / postfix_expression)

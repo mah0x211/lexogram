@@ -48,7 +48,7 @@ return assert(require('lexogram.grammar')({
         _argument = [[ assignment_expression / type_name ]],
     },
     rules = {
-        ['=_struct_declarators'] = [[ struct_declarator_list? ]],
+        ['=_struct_declarators'] = [[ _struct_declarator_list? ]],
         ['=argument_expression_list'] = [[ _argument ("," _argument)* ]],
         ['=_strings'] = [[ string_literal++ (identifier _strings?+)? ]],
         ['=_postfix_suffix'] = [[
