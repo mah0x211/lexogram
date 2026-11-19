@@ -386,6 +386,39 @@ function testcase.compile_is_deterministic_plain_data()
     assert.is_nil(first.lexer.conflicts)
 end
 
+function testcase.compile_reuses_the_check_of_a_built_in_grammar()
+    local lexogram = require('lexogram')
+    local grammar = assert(lexogram.load('lexogram:lua51'))
+    local first, warnings = assert(compile.compile(grammar))
+    -- a copy of the object that the check of lexogram.grammar made: the
+    -- same as compiling the grammar from its check
+    local diagnostics, lexer, syntax = check.run(grammar)
+    assert.equal(warnings, diagnostics)
+    assert.is_table(lexer)
+    assert.is_table(syntax)
+    local unchanged = {}
+    for k, v in pairs(grammar) do
+        unchanged[k] = v
+    end
+    unchanged.version = grammar.version .. '+test'
+    local fresh = assert(compile.compile(unchanged))
+    fresh.version = first.version
+    assert.equal(first, fresh)
+    assert.equal(plain_data_problems(first), {})
+    -- each call returns its own copy
+    first.kinds[1].name = 'changed'
+    first.lexer.trans[1] = -1
+    warnings[1] = 'changed'
+    local second, again = assert(compile.compile(grammar))
+    assert.not_equal(second.kinds[1].name, 'changed')
+    assert.not_equal(second.lexer.trans[1], -1)
+    assert.equal(again, diagnostics)
+    -- a grammar that differs from the checked one is checked again
+    grammar.tokens.name = '[a-z]+'
+    local changed = assert(compile.compile(grammar))
+    assert.not_equal(changed.lexer.trans, second.lexer.trans)
+end
+
 function testcase.compile_finds_shared_tables_in_test_helper()
     local shared = {}
     assert.equal(plain_data_problems({

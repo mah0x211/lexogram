@@ -376,21 +376,15 @@ local function minimize(n, trans, keys, nclasses, dispatch)
             else
                 t = a <= nclasses and row[a] or 0
             end
-            if not t or t == 0 then
-                t = dead
+            -- the edges to the dead state are not needed: its block is never
+            -- a splitter (see below)
+            if t and t ~= 0 then
+                nedges = nedges + 1
+                local h = (a - 1) * dead + t
+                from[nedges], link[nedges] = s, head[h]
+                head[h] = nedges
             end
-            nedges = nedges + 1
-            local h = (a - 1) * dead + t
-            from[nedges], link[nedges] = s, head[h]
-            head[h] = nedges
         end
-    end
-    -- the dead state goes to itself on every symbol
-    for a = 1, nsym do
-        nedges = nedges + 1
-        local h = (a - 1) * dead + dead
-        from[nedges], link[nedges] = dead, head[h]
-        head[h] = nedges
     end
 
     -- blocks are ranges of elems: block b is elems[first[b] .. first[b] +
@@ -422,7 +416,11 @@ local function minimize(n, trans, keys, nclasses, dispatch)
         end
     end
 
-    -- the splitters (block, symbol) to process, and which are pending
+    -- the splitters (block, symbol) to process, and which are pending. All
+    -- the blocks of the initial partition but one are enough, as a split
+    -- by the rest is a split by the one left out: that is the block of the
+    -- dead state, which never splits (it has one state) and so is never
+    -- pushed later either
     local wblock, wsym, wtop = {}, {}, 0
     local pending = {}
     local function push(b, a)
@@ -430,7 +428,7 @@ local function minimize(n, trans, keys, nclasses, dispatch)
         wblock[wtop], wsym[wtop] = b, a
         pending[(b - 1) * nsym + a] = true
     end
-    for b = 1, nblocks do
+    for b = 1, nblocks - 1 do
         for a = 1, nsym do
             push(b, a)
         end

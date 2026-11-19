@@ -28,7 +28,9 @@
 --
 -- The function merges a grammar that extends another one (whose extends
 -- must name a built-in grammar, since a module has no directory) and runs
--- every check of lexogram.check. It returns a function that returns a new
+-- every check of lexogram.check, whose automaton and decisions make the
+-- compiled object that lexogram.compile returns a copy of for the grammar
+-- (see remember in lexogram.compile). It returns a function that returns a new
 -- copy of the checked grammar on each call, so that no caller can change
 -- the definition, nil and the diagnostics (warnings only), or nil, a
 -- message and the diagnostics. The function is
@@ -53,6 +55,7 @@ local load_text = require('lexogram.compat').load_text
 local write = require('lexogram.source').write
 local check = require('lexogram.check')
 local extend = require('lexogram.extend')
+local remember = require('lexogram.compile').remember
 
 --- builtin returns a new copy of the built-in grammar name, or nil and an
 --- error message.
@@ -190,14 +193,19 @@ local function check_mixin(def)
 end
 
 --- compile_function returns the function that returns a new copy of tbl,
---- compiled from its Lua source, or nil and an error message.
+--- compiled from its Lua source src (written by lexogram.source when not
+--- given), or nil and an error message.
 --- @param tbl table
+--- @param src string?
 --- @return function? fn
 --- @return string? err
-local function compile_function(tbl)
-    local src, err = write(tbl, {})
+local function compile_function(tbl, src)
+    local err
     if not src then
-        return nil, err
+        src, err = write(tbl, {})
+        if not src then
+            return nil, err
+        end
     end
     -- the chunk name tells the grammar and its version in error messages
     -- and tracebacks ("@" is not a character of a name or a version)
@@ -321,17 +329,20 @@ local function new(def)
         return nil, 'embeds needs extends'
     end
 
-    local diagnostics = check.check(grammar)
+    local diagnostics, lexer, syntax = check.run(grammar)
     local err = error_lines(diagnostics)
     if err then
         return nil, err, diagnostics
     end
+    -- a grammar that passed every check holds only strings, booleans and
+    -- tables, which all have source text; compiling a copy of it uses the
+    -- automaton and decisions of this check
+    local src = assert(write(grammar, {}))
+    remember(grammar, src, diagnostics, lexer, syntax)
     for _, d in ipairs(diagnostics) do
         warnings[#warnings + 1] = d
     end
-    -- a grammar that passed every check holds only strings, booleans and
-    -- tables, which all have source text
-    return assert(compile_function(grammar)), nil, warnings
+    return assert(compile_function(grammar, src)), nil, warnings
 end
 
 return setmetatable({
