@@ -143,6 +143,8 @@ function testcase.module_files_lists_rockspec_modules()
         'lib/grammar.lua',
         'grammars/bom_shebang.lua',
         'grammars/c99.lua',
+        'grammars/c99_macro.lua',
+        'grammars/c_macro.lua',
         'grammars/lua51.lua',
         'grammars/lua51_shebang.lua',
         'grammars/lua52.lua',

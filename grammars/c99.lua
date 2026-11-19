@@ -370,10 +370,13 @@ return assert(require('lexogram.grammar')({
         _struct_rest = [[
             _qualifier_or_keyword_type _struct_rest
             | (
-                (struct_declarator_list ";")
+                (_struct_declarators ";")
                 / (type_specifier _struct_rest)
             )
         ]],
+        -- the declarators of a member, a rule of its own that a mixin can
+        -- replace
+        _struct_declarators = [[ struct_declarator_list ]],
         _qualifier_or_keyword_type = [[
             _keyword_type_specifier | type_qualifier
         ]],
@@ -519,9 +522,12 @@ return assert(require('lexogram.grammar')({
         cast_expression = [[ "(" type_name ")" _term ]],
         postfix_expression = [[ _primary_expression _postfix_suffix* ]],
         _primary_expression = [[
-            identifier | number | character_constant | string_literal+
+            identifier | number | character_constant | _strings
             | (compound_literal / "(" expression ")")
         ]],
+        -- adjacent string literals, a rule of its own that a mixin can
+        -- replace
+        _strings = [[ string_literal+ ]],
         compound_literal = [[
             "(" type_name ")" _lbrace initializer_list ","? _rbrace
         ]],
