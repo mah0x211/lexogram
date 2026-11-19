@@ -234,6 +234,9 @@ local function parse(compiled, source)
     local qk, qs, qe = {}, {}, {}
     local qh, qt = 1, 0
     local raw_pos = 1
+    -- the queue index of the next valid token once peek has found it, kept
+    -- until the head of the queue moves past it (nil: not known)
+    local next_i
     -- the token at a position of the source, which keeps the values of its
     -- lookaheads (see lexogram.tokenizer)
     local scan = scanner(compiled, new_input(source))
@@ -315,12 +318,21 @@ local function parse(compiled, source)
     --- ahead (kind 0 and nil at the end of input).
     local function peek(n)
         local i = qh
+        if next_i then
+            if n == 1 then
+                return qk[next_i], next_i
+            end
+            i, n = next_i + 1, n - 1
+        end
         while true do
             if i > qt and not read() then
                 return END, nil
             end
             local k = qk[i]
             if not skipped[k] then
+                if not next_i then
+                    next_i = i
+                end
                 n = n - 1
                 if n == 0 then
                     return k, i
@@ -359,9 +371,11 @@ local function parse(compiled, source)
             local _, i = peek(1)
             local start = len + 1
             if i then
-                flush(i)
+                if i > qh then
+                    flush(i)
+                end
                 start = qs[i]
-            else
+            elseif qt >= qh then
                 flush(qt + 1)
             end
             fstart[depth] = start
@@ -431,7 +445,7 @@ local function parse(compiled, source)
         last_stop, last_token = tstop[ntry], ttoken[ntry]
         local resume = tresume[ntry]
         ntry = ntry - 1
-        qh, qt = 1, 0
+        qh, qt, next_i = 1, 0, nil
         failure = nil
         nexp = 0
         return resume
@@ -447,10 +461,12 @@ local function parse(compiled, source)
             local k = code[pc + 1]
             local t, i = peek(1)
             if (t == k or base_of[t] == k) and i then
-                flush(i)
+                if i > qh then
+                    flush(i)
+                end
                 emit(TOKEN_EVENT, k, qs[i], qe[i])
                 last_stop, last_token = qe[i], count
-                qh = i + 1
+                qh, next_i = i + 1, nil
                 if qh > qt then
                     -- reuse the queue arrays from the start
                     qh, qt = 1, 0
