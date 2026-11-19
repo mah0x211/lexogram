@@ -144,6 +144,8 @@ function testcase.module_files_lists_rockspec_modules()
         'grammars/bom_shebang.lua',
         'grammars/c11.lua',
         'grammars/c11_macro.lua',
+        'grammars/c23.lua',
+        'grammars/c23_macro.lua',
         'grammars/c99.lua',
         'grammars/c99_macro.lua',
         'grammars/c_macro.lua',

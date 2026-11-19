@@ -374,9 +374,10 @@ return assert(require('lexogram.grammar')({
                 / (type_specifier _struct_rest)
             )
         ]],
-        -- the declarators of a member, a rule of its own that a mixin can
-        -- replace
-        _struct_declarators = [[ struct_declarator_list ]],
+        -- the declarators of a member, rules of their own that a mixin
+        -- can replace or refer to
+        _struct_declarators = [[ _struct_declarator_list ]],
+        _struct_declarator_list = [[ struct_declarator_list ]],
         _qualifier_or_keyword_type = [[
             _keyword_type_specifier | type_qualifier
         ]],
