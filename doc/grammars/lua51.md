@@ -1,6 +1,6 @@
 # Lua 5.1 grammar
 
-The built-in grammars of Lua 5.1. The rules follow the complete syntax of Lua in section 8 of the Lua 5.1 reference manual; rule names come from the manual and from the Lua 5.1 parser (`lparser.c`). Together with the token names they are a public contract with consumers: a change that breaks it is listed in [the changes](#changes).
+The built-in grammars of Lua 5.1. The rules follow the complete syntax of Lua in section 8 of the Lua 5.1 reference manual; rule names come from the manual and from the Lua 5.1 parser (`lparser.c`). Like every [built-in grammar](../grammar.md#built-in-grammars), they are samples with no promise of compatibility: copy them with `lexogram.merge` to use them, and see [the changes](#changes) for what changed.
 
 ```lua
 local lexogram = require('lexogram')

@@ -24,11 +24,11 @@
 --
 -- The rules follow the complete syntax of Lua in section 8 of the Lua 5.1
 -- reference manual; rule names come from the manual and from the Lua 5.1
--- parser (lparser.c). Together with the token names they are a public
--- contract with consumers: a change that breaks it is listed in the
--- changes of doc/grammars/lua51.md. The sections below
--- follow the top-level fields of the table returned at the end of this
--- file.
+-- parser (lparser.c). Like every built-in grammar, it is a sample with no
+-- promise of compatibility: copy it with lexogram.merge to use it (see
+-- doc/grammar.md); the changes of doc/grammars/lua51.md list what changed.
+-- The sections below follow the top-level fields of the table returned at
+-- the end of this file.
 --
 -- Metadata
 --
