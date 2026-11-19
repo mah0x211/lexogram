@@ -75,6 +75,64 @@ local function compiled(name)
     return COMPILED[name]
 end
 
+--- find_luajit returns the pathname of a LuaJIT 2.1 whose version is at
+--- least 2.1.<least> (the time of a change of the syntax): the value of the
+--- environment variable env, or one installed by lenv, or nil. It prints a
+--- notice when there is none.
+--- @param least integer
+--- @param env string
+--- @param test string the name of the test, for the notice
+--- @return string?
+local function find_luajit(least, env, test)
+    local candidates = {}
+    candidates[#candidates + 1] = os.getenv(env)
+    local roots = {}
+    roots[#roots + 1] = os.getenv('LENV_ROOT')
+    if os.getenv('HOME') then
+        roots[#roots + 1] = os.getenv('HOME') .. '/.lenv'
+    end
+    for _, root in ipairs(roots) do
+        for pathname in run('ls -d ' .. shell_quote(root) ..
+                                '/luajit/*/bin/luajit 2>/dev/null'):gmatch(
+                            '[^\n]+') do
+            candidates[#candidates + 1] = pathname
+        end
+    end
+    for i = 1, #candidates do
+        local luajit = candidates[i]
+        local version = run(shell_quote(luajit) .. ' -v 2>&1'):match(
+                            '^LuaJIT 2%.1%.(%d+)')
+        if version and tonumber(version) >= least then
+            return luajit
+        end
+    end
+    print(test .. ': LuaJIT 2.1.' .. least .. ' or later not found;' ..
+              ' the comparisons with it are skipped (set ' .. env .. ')')
+    return nil
+end
+
+-- The script that LuaJIT runs to check the file named by its argument.
+local LOADFILE = 'local f, err = loadfile(arg[1]) if not f then' ..
+                     ' io.write(err) end'
+
+--- judge_luajit returns whether loadfile of LuaJIT and the grammar accept
+--- the case file pathname (the lexer of LuaJIT skips a byte order mark and
+--- a shebang line itself, and so does the grammar).
+--- @param luajit string
+--- @param grammar string a built-in grammar such as 'lexogram:luajit'
+--- @param pathname string
+--- @return boolean official
+--- @return boolean grammar
+local function judge_luajit(luajit, grammar, pathname)
+    local f = assert(io.open(pathname, 'rb'))
+    local src = f:read('*a')
+    f:close()
+    local official = run('printf %s ' .. shell_quote(LOADFILE) .. ' | ' ..
+                             shell_quote(luajit) .. ' - ' ..
+                             shell_quote(pathname) .. ' 2>&1') == ''
+    return official, lexogram.parse(compiled(grammar), src) ~= nil
+end
+
 --- blank_loaded returns src with what the file loader of Lua skips before
 --- parsing replaced by spaces: a UTF-8 byte order mark when bom is true
 --- (Lua 5.2 and later), and then a first line that starts with "#".
@@ -116,5 +174,7 @@ end
 
 return {
     find_luac = find_luac,
+    find_luajit = find_luajit,
     judge = judge,
+    judge_luajit = judge_luajit,
 }

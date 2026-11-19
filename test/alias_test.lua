@@ -141,6 +141,21 @@ function testcase.a_rule_named_by_an_alias_only_is_used()
     end
 end
 
+function testcase.warnings_inside_aliases_name_their_rule()
+    local found = {}
+    for _, d in ipairs(lexogram.check(grammar({
+        chunk = '(name*+)->x ";"',
+        x = 'name',
+    }))) do
+        if d.code == 'unneeded_possessive' then
+            found[#found + 1] = d.path
+        end
+    end
+    assert.equal(found, {
+        'rules.chunk',
+    })
+end
+
 function testcase.diagnostics_inside_aliases_name_their_rule()
     assert.equal(errors_of({
         chunk = '(name name | name name)->x ";"',
