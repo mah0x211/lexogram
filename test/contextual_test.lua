@@ -107,7 +107,7 @@ function testcase.a_contextual_keyword_is_a_name_elsewhere()
                  '(chunk (stat (other name:globex =:= name:y ) ) )')
     -- a keyword that is not expected is reported as its base token
     assert.equal(events_of(compiled, 'x = y global'),
-                 'unexpected end of input, expected "="')
+                 'unexpected end of input, expected name, "="')
     assert.equal(events_of(compiled, 'x global'),
                  'unexpected name, expected "="')
 end

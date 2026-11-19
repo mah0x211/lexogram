@@ -231,7 +231,11 @@ function testcase.characters_and_strings_have_the_escapes_of_c99()
                  'assignment_expression(postfix_expression("a\\\nb" "c"))')
     -- an escape that C99 does not have, and an unclosed string
     assert.equal(failure([[char *s = "\q";]]).code, 'syntax_error')
-    assert.equal(failure('char *s = "a;').code, 'syntax_error')
+    local err = failure('char *s = "a;')
+    assert.equal(err.code, 'syntax_error')
+    -- at the quote, which no token starts, after the trials of the
+    -- declaration
+    assert.equal(err.pos, 11)
 end
 
 function testcase.directives_and_comments_are_skipped()

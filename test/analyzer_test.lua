@@ -915,12 +915,45 @@ function testcase.parse_reports_errors_after_failed_alternatives()
         },
     })
 
-    -- both alternatives fail; the error comes from the last one
+    -- both alternatives fail at the same token: the error lists what each
+    -- of them expected there
     local result, err = analyzer.parse(compiled, 'f x')
 
     assert.is_nil(result)
     assert.equal(err.pos, 3)
-    assert.equal(err.message, 'unexpected name, expected "("')
+    assert.equal(err.message, 'unexpected name, expected "=", "("')
+end
+
+function testcase.parse_reports_the_furthest_failure_of_the_alternatives()
+    local compiled = compiled_of({
+        symbols = {
+            '=',
+            '(',
+            ')',
+            ';',
+        },
+        rules = {
+            chunk = 'stat*',
+            stat = 'name "=" name ";" / name "(" ")"',
+        },
+    })
+
+    -- the first alternative goes further than the last one: its error is
+    -- reported, not that of "(" after f
+    local result, err = analyzer.parse(compiled, 'f = x y')
+
+    assert.is_nil(result)
+    assert.equal(err.pos, 7)
+    assert.equal(err.actual, compiled.names.name)
+    assert.equal(err.message, 'unexpected name, expected ";"')
+    -- a later failure is further than one of a statement before it
+    result, err = analyzer.parse(compiled, 'f = x y; g() h')
+    assert.is_nil(result)
+    assert.equal(err.pos, 7)
+    result, err = analyzer.parse(compiled, 'f = x; g() h')
+    assert.is_nil(result)
+    assert.equal(err.pos, 13)
+    assert.equal(err.message, 'unexpected end of input, expected "=", "("')
 end
 
 function testcase.parse_reports_unterminated_tokens()
