@@ -412,8 +412,6 @@ function testcase.structs_unions_enums_and_initializers()
             'designator(. b) designator(. c) =) initializer(' ..
             'assignment_expression(postfix_expression(2)))) , }))) ;)',
     })
-    -- a member needs a declarator in C99
-    assert.equal(failure('struct S { int; };').code, 'syntax_error')
 end
 
 function testcase.function_definitions()
@@ -560,6 +558,61 @@ function testcase.syntax_errors_stop_the_analysis()
         'void f(void) { return }',
         'void f(void) { if x; }',
         'int f(int a,);',
+    }) do
+        assert.equal(failure(source).code, 'syntax_error')
+    end
+end
+
+-- the forms of macros (lexogram:c_macro, which c99 embeds)
+
+function testcase.a_member_may_be_declared_by_a_macro()
+    assert.equal(externals('struct S { CommonHeader; int a; };')[1],
+                 'declaration(type_specifier(struct_or_union_specifier(' ..
+                     'struct S { struct_declaration(type_specifier(' ..
+                     'typedef_name(CommonHeader)) ;) struct_declaration(' ..
+                     'type_specifier(int) struct_declarator_list(' ..
+                     'struct_declarator(declarator(direct_declarator(a)))) ' ..
+                     ';) })) ;)')
+end
+
+function testcase.an_argument_that_is_no_expression_is_a_type_name()
+    assert.equal(expression('cast(char *, s)'),
+                 'assignment_expression(postfix_expression(cast ( ' ..
+                     'argument_expression_list(type_name(type_specifier(' ..
+                     'char) abstract_declarator(pointer(*))) , ' ..
+                     'assignment_expression(postfix_expression(s))) )))')
+    assert.equal(expression('newvector(L, n, Proto *)'),
+                 'assignment_expression(postfix_expression(newvector ( ' ..
+                     'argument_expression_list(assignment_expression(' ..
+                     'postfix_expression(L)) , assignment_expression(' ..
+                     'postfix_expression(n)) , type_name(type_specifier(' ..
+                     'typedef_name(Proto)) abstract_declarator(' ..
+                     'pointer(*)))) )))')
+    -- an argument that is an expression stays one
+    assert.equal(expression('f(x)'),
+                 'assignment_expression(postfix_expression(f ( ' ..
+                     'argument_expression_list(assignment_expression(' ..
+                     'postfix_expression(x))) )))')
+end
+
+function testcase.macros_may_be_next_to_string_literals()
+    assert.equal(expression('"a" LUA_QS "b"'),
+                 'assignment_expression(postfix_expression("a" LUA_QS "b"))')
+    assert.equal(expression('LUA_QL("x") " b"'),
+                 'assignment_expression(postfix_expression(LUA_QL ( ' ..
+                     'argument_expression_list(assignment_expression(' ..
+                     'postfix_expression("x"))) ) " b"))')
+    assert.equal(expression('FMT "x" Y'),
+                 'assignment_expression(postfix_expression(FMT "x" Y))')
+end
+
+function testcase.other_forms_of_macros_are_errors()
+    for _, source in ipairs({
+        -- names of macros without a string literal
+        'void f(void) { g(A B); }',
+        -- an operator or a statement as an argument
+        'void f(void) { x = intop(+, a, b); }',
+        'void f(void) { TRY(L, g(); ); }',
     }) do
         assert.equal(failure(source).code, 'syntax_error')
     end

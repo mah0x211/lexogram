@@ -373,16 +373,12 @@ function testcase.samples_parse()
         walk(events.tree(result))
         assert.equal(table.concat(texts), source)
     end
-    local source = sample('c23/sample.c')
-    -- the sample of C11 parses, and c23_macro reads that of C23 as c23
+    -- the sample of C11 parses
     without_hook(parse, sample('c11/sample.c'))
-    assert.equal(without_hook(unit, source, 'lexogram:c23_macro'),
-                 without_hook(unit, source))
 end
 
-function testcase.c23_macro_reads_the_forms_of_macros()
-    assert.equal(unit('struct S { CommonHeader; };\nchar *s = Q("a") "b";',
-                      'lexogram:c23_macro'),
+function testcase.the_forms_of_macros_are_inherited_from_c99()
+    assert.equal(unit('struct S { CommonHeader; };\nchar *s = Q("a") "b";'),
                  'translation_unit(external_declaration(declaration(' ..
                      'type_specifier(struct_or_union_specifier(struct S { ' ..
                      'member_declaration(type_specifier(typedef_name(' ..
