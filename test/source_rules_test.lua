@@ -126,6 +126,7 @@ function testcase.module_files_lists_rockspec_modules()
         'lib/lexogram.lua',
         'lib/analyzer.lua',
         'lib/check.lua',
+        'lib/cli.lua',
         'lib/compat.lua',
         'lib/compile.lua',
         'lib/compile/codegen.lua',
@@ -167,6 +168,22 @@ function testcase.module_files_lists_rockspec_modules()
         'lib/utf8.lua',
         'lib/version.lua',
     })
+end
+
+function testcase.luacov_measures_every_library_module()
+    -- the modules of lib/ in the rockspec are those that .luacov measures
+    local src = read_file(ROOT .. 'rockspecs/lexogram-scm-1.rockspec')
+    local env = {}
+    assert(compat.load_text(src, 'rockspec', env))()
+    local expected = {}
+    for name, pathname in compat.sorted_pairs(env.build.modules) do
+        if sub(pathname, 1, 4) == 'lib/' then
+            expected[name] = pathname
+        end
+    end
+    local config = {}
+    assert(compat.load_text(read_file(ROOT .. '.luacov'), '.luacov', config))()
+    assert.equal(config.modules, expected)
 end
 
 -- rules for every module source

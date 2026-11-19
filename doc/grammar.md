@@ -108,6 +108,8 @@ f:close()
 
 `lexogram.dump(compiled)` returns Lua source text that returns the compiled grammar, the same for the same compiled grammar on every runtime; `lexogram.undump(text)` reads it back, or returns `nil` and an error message. The layout of a compiled grammar may change from one version of lexogram to the next, so the text carries the revision of the layout (`format`), and `undump` rejects text of another revision: compile the grammar again then. `undump` runs the text in an empty environment, which is no security sandbox: read only text that you trust as code.
 
+The [lexogram command](command.md) does the same: `lexogram compile c23.lua -o c23.compiled.lua`, then `lexogram parse c23.compiled.lua FILE`.
+
 ## Top-level fields
 
 | Field | Required | Value | Meaning |
