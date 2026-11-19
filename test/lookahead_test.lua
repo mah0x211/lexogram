@@ -136,6 +136,74 @@ function testcase.lookaheads_without_a_bound_are_computed_once_per_input()
     }, 1)), 'source must be string or input, got table', true)
 end
 
+-- the ids of the predicates without a bound of compiled
+local function unbounded_predicates(compiled)
+    local ids = {}
+    for p, entry in ipairs(compiled.lexer.predicates) do
+        if entry.distance == false then
+            ids[#ids + 1] = p
+        end
+    end
+    assert.greater(#ids, 0)
+    return ids
+end
+
+function testcase.lookaheads_without_a_bound_are_evaluated_where_needed()
+    -- a line break is a space unless "#" and a number follow it
+    local compiled = compiled_of({
+        tokens = {
+            space = '(" " | "\\n" (?!"#" " "* [0-9]))+',
+            directive = '"\\n#" " "* [0-9]+',
+            name = '[a-z]+',
+            hash = '"#"',
+        },
+        rules = {
+            chunk = '(name | hash | directive)*',
+        },
+        skip = {
+            'space',
+        },
+    })
+    local source = ('abcdefgh\n'):rep(50) .. '#x\n#  12\nend'
+    local tokens = lex(compiled, source)
+    assert.equal(tokens[#tokens - 4], 'hash:#')
+    assert.equal(tokens[#tokens - 2], 'directive:\n#  12')
+    -- after each line break the scan reads a byte or a few: far less than
+    -- the input, so the values of the whole input are not computed
+    local input = lexogram.input(source)
+    assert.equal(lex(compiled, source, input), tokens)
+    for _, p in ipairs(unbounded_predicates(compiled)) do
+        assert.is_nil(input.values[p])
+        assert.less(input.read[p], #source)
+    end
+end
+
+function testcase.lookaheads_without_a_bound_are_computed_when_they_read_much()
+    local compiled = compiled_of({
+        tokens = {
+            a = '"a" (?="a"* "b")',
+            b = '"b"',
+            x = '"a" (?!"a"* "b")',
+        },
+        rules = {
+            chunk = '(a | b | x)*',
+        },
+    })
+    -- each a reads up to the b: the scans would read about the square of
+    -- the length, so the values of the whole input are computed once
+    local source = ('a'):rep(100) .. 'b' .. ('a'):rep(100)
+    local tokens = lex(compiled, source)
+    assert.equal(tokens[1], 'a:a')
+    assert.equal(tokens[101], 'b:b')
+    assert.equal(tokens[102], 'x:a')
+    local input = lexogram.input(source)
+    assert.equal(lex(compiled, source, input), tokens)
+    for _, p in ipairs(unbounded_predicates(compiled)) do
+        assert.equal(#input.values[p], #source + 1)
+        assert.less_or_equal(input.read[p], #source + 1)
+    end
+end
+
 function testcase.lookaheads_at_the_start_and_nested_without_a_bound()
     local compiled = compiled_of({
         tokens = {

@@ -46,12 +46,14 @@
 -- Lookaheads: an automaton with dispatch states (see lexogram.compile) is
 -- run by a separate loop that evaluates the predicates of a dispatch
 -- state at its position. A predicate with a distance is evaluated there by
--- its forward automaton, which reads at most that many bytes; a predicate
--- without one is computed for every position of the input once, by its
--- backward automaton run from the end, and kept in the input made by
--- input(source), so that no part of the input is scanned again for each
--- token. Given a plain string, such a predicate is evaluated where it is
--- needed by its forward automaton too, which may read up to the end of the
+-- its forward automaton, which reads at most that many bytes. A predicate
+-- without one, given an input made by input(source), is evaluated by its
+-- forward automaton too while the bytes it has read on that input stay
+-- within its length; beyond that, it is computed for every position of the
+-- input once, by its backward automaton run from the end, and kept in the
+-- input, so that no part of the input is scanned again for each token (see
+-- holds). Given a plain string, such a predicate is evaluated where it is
+-- needed by its forward automaton, which may read up to the end of the
 -- input for that call. An input holds its source, so the values kept in it
 -- always belong to the string tokenized (comparing the source of a call
 -- with a kept one would read both on Lua 5.5, whose comparison of long
@@ -150,6 +152,13 @@ local function precompute(predicates, p, source, len, state)
 end
 
 --- holds returns whether the predicate p holds at pos of source.
+---
+--- A predicate without a bound, given an input, is evaluated by its forward
+--- automaton until the bytes read for it on that input (one more for each
+--- evaluation) would exceed the length of the input plus one; then its
+--- values are computed for the whole input by precompute and kept. So it
+--- costs at most about twice the length of the input, and much less where
+--- it is needed at few positions and reads few bytes there.
 --- @param predicates table[]
 --- @param p integer
 --- @param source string
@@ -159,16 +168,21 @@ end
 --- @return boolean
 function holds(predicates, p, source, pos, len, state)
     local entry = predicates[p]
+    -- the bytes that the scan may read, for a predicate without a bound on
+    -- an input
+    local budget
     if entry.backward and state then
-        local values = state.values[p] or
-                           precompute(predicates, p, source, len, state)
-        return byte(values, pos) == 1
+        local values = state.values[p]
+        if values then
+            return byte(values, pos) == 1
+        end
+        budget = len + 1 - (state.read[p] or 0)
     end
     local d = entry.forward
     local nclasses, classes, trans, accept, dispatch = d.nclasses, d.classes,
                                                        d.trans, d.accept,
                                                        d.dispatch
-    local s = 1
+    local s, start, result = 1, pos, false
     while true do
         local k = accept[s]
         if k < 0 then
@@ -177,21 +191,29 @@ function holds(predicates, p, source, pos, len, state)
                 e.targets[valuation(predicates, e.preds, source, pos, len, state) +
                     1]
             if s == 0 then
-                return false
+                break
             end
             k = accept[s]
         end
         if k ~= 0 then
-            return true
+            result = true
+            break
         elseif pos > len then
-            return false
+            break
+        elseif budget and pos - start + 1 >= budget then
+            return byte(precompute(predicates, p, source, len, state), start) ==
+                       1
         end
         s = trans[(s - 1) * nclasses + classes[byte(source, pos) + 1]]
         if s == 0 then
-            return false
+            break
         end
         pos = pos + 1
     end
+    if budget then
+        state.read[p] = (state.read[p] or 0) + pos - start + 1
+    end
+    return result
 end
 
 --- longest_guarded is longest for an automaton with dispatch states (whose
@@ -543,9 +565,9 @@ end
 --- not match all its patterns, otherwise a pattern after the first of the
 --- array that defines the token.
 --- source is a string, or an input made by input(source) for repeated
---- calls on the same string, which keeps the values of the lookaheads
---- computed for the whole input; with a string they are computed for the
---- call.
+--- calls on the same string, which keeps what the lookaheads without a
+--- bound have read and the values computed for the whole input; with a
+--- string they are evaluated for the call.
 --- @param compiled table result of lexogram.compile
 --- @param source string|table string or input
 --- @param pos integer 1 <= pos <= #source + 1
@@ -620,7 +642,8 @@ local function tokenize(compiled, source, pos, mode)
 end
 
 --- input returns an input of source for repeated calls of tokenize on it:
---- it holds source and the values of the lookaheads computed for it.
+--- it holds source, the bytes that the lookaheads without a bound have
+--- read on it and the values computed for it.
 --- @param source string
 --- @return table
 local function input(source)
@@ -630,6 +653,9 @@ local function input(source)
     return setmetatable({
         source = source,
         values = {},
+        -- the bytes read by the forward scans of each predicate without a
+        -- bound (see holds)
+        read = {},
     }, INPUT)
 end
 
