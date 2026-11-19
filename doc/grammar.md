@@ -15,6 +15,7 @@ local result, err = lexogram.parse(compiled, source)
 ## Contents
 
 - [The form of a grammar](#the-form-of-a-grammar)
+- [Built-in grammars](#built-in-grammars)
 - [Top-level fields](#top-level-fields)
 - [Metadata](#metadata): `lexogram`, `name`, `version`
 - [start](#start)
@@ -71,6 +72,22 @@ return assert(require('lexogram.grammar')({
 
 `require('lexogram.grammar')(def)` merges `def` into the grammar it extends, if any, and runs every check of `lexogram.check`. Without errors it returns a function that returns a new copy of the checked grammar on each call, so that no caller can change the definition, `nil`, and the diagnostics (warnings only, such as an unreachable rule); with errors it returns `nil`, a message with one line per error, and the diagnostics. A module has no directory, so its `extends` and `embeds` can name built-in grammars and mixins only, and it cannot use `import`. A [mixin](#mixins) module is written the same way.
 
+## Built-in grammars
+
+lexogram ships grammars of Lua 5.1 to 5.5, LuaJIT, C99, C11 and C23, and the mixins they embed, as the modules `lexogram.grammars.<name>`, read as `"lexogram:<name>"`; [grammars/](grammars/) has a document for each. They are there to test lexogram on real languages, and as starting points for grammars of your own. They make no promise of compatibility: from one version of lexogram to the next, their rules, tokens, helper rules and events may change, and a grammar that extends one of them may break.
+
+To use one, copy it. `lexogram.merge` returns the Lua source of a grammar merged with the grammars it extends and the mixins it embeds: a grammar file that extends no other one. Keep it in your project under a name and a version of your own, and change it there:
+
+```lua
+local lexogram = require('lexogram')
+local source = assert(lexogram.merge('lexogram:c23'))
+local f = assert(io.open('c23.lua', 'w'))
+f:write(source)
+f:close()
+```
+
+The document of each built-in grammar lists its changes, which tells what to bring into a copy.
+
 ## Top-level fields
 
 | Field | Required | Value | Meaning |
@@ -100,7 +117,7 @@ The fields `lexogram`, `name` and `version` tell which grammar a table is.
 - **`lexogram`**: the revision of this specification, `yyyy.mm.dd.n`. A later lexogram reads a grammar with the meaning of the revision it states; a revision newer than the running lexogram, or older than the first one, is an error. The only revision so far is `2026.11.15.1`.
 - **`name`**: matches `^[A-Za-z0-9_-]+$`. A built-in grammar is named after its module (`lexogram:lua51` is named `lua51`). The compiled object carries it as `compiled.name`.
 - **`version`**: the version of the grammar itself, a string of letters, digits, `.`, `_`, `+` and `-` (`^[0-9A-Za-z._+-]+$`). Its form and meaning are the author's: lexogram does not compare versions. The compiled object carries it as `compiled.version`, and the functions of `lexogram.grammar` have it in their chunk name (`=lexogram.grammar:<name>@<version>`), so that error messages and tracebacks tell the grammar and its version.
-- **Versions of the built-in grammars**: the version of the language that a built-in grammar was checked against, a `-`, and the revision of the grammar, counted from 1: `5.4.8-1` is the first revision for Lua 5.4.8, as a LuaRocks rockspec writes `1.0.0-1`. The revision is not a pre-release as in Semantic Versioning. Rule names and token names are a contract with consumers; since the version does not tell a change that breaks it, the document of each grammar lists its changes. The built-in mixins, which have no language, have their own version (`1.0.0`).
+- **Versions of the built-in grammars**: the version of the language that a built-in grammar was checked against, a `-`, and the revision of the grammar, counted from 1: `5.4.8-1` is the first revision for Lua 5.4.8, as a LuaRocks rockspec writes `1.0.0-1`. The revision is not a pre-release as in Semantic Versioning. The version tells which revision a [copy](#built-in-grammars) was made from, and the document of each grammar lists its changes. The built-in mixins, which have no language, have their own version (`1.0.0`).
 
 ## start
 
