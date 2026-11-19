@@ -232,18 +232,14 @@ function testcase.samples_parse()
     end
     walk(events.tree(result))
     assert.equal(table.concat(texts), source)
-    -- the sample of C99 is read as by c99, and that of C11 as by c11 with
-    -- the forms of macros
+    -- the sample of C99 is read as by c99
     local c99 = sample('c99/sample.c')
     assert.equal(without_hook(unit, c99),
                  without_hook(unit, c99, 'lexogram:c99'))
-    assert.equal(without_hook(unit, source, 'lexogram:c11_macro'),
-                 without_hook(unit, source))
 end
 
-function testcase.c11_macro_reads_the_forms_of_macros()
-    assert.equal(unit('char *s = cast(char *, "a" Q "b");',
-                      'lexogram:c11_macro'),
+function testcase.the_forms_of_macros_are_inherited_from_c99()
+    assert.equal(unit('char *s = cast(char *, "a" Q "b");'),
                  'translation_unit(external_declaration(declaration(' ..
                      'type_specifier(char) init_declarator_list(' ..
                      'init_declarator(declarator(pointer(*) ' ..

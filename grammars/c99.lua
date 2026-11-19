@@ -25,11 +25,14 @@
 --
 -- The grammar reads a C source as written, before preprocessing: a
 -- directive is a token that the rules skip, and macros are not expanded,
--- so the code outside the directives must have the syntax of C99 as it is
--- (ISO/IEC 9899:1999, Annex A). The rules follow the names of Annex A.
+-- so the code outside the directives has the syntax of C99 (ISO/IEC
+-- 9899:1999, Annex A), with the forms that macros make in it, which the
+-- mixin lexogram:c_macro adds and which have no other reading in C. The
+-- rules follow the names of Annex A.
 --
 -- Metadata
 --
+--   embeds    'lexogram:c_macro', the forms of macros
 --   lexogram  '2026.11.15.1'
 --   name      'c99', the built-in grammar "lexogram:c99" (module
 --             lexogram.grammars.c99)
@@ -133,6 +136,9 @@
 -- an assignment or a conditional, and expression is a list of
 -- assignment_expression.
 return assert(require('lexogram.grammar')({
+    embeds = {
+        'lexogram:c_macro',
+    },
     lexogram = '2026.11.15.1',
     name = 'c99',
     version = '1999-1',

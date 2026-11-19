@@ -20,8 +20,8 @@
 -- THE SOFTWARE.
 --
 -- The forms of C sources before preprocessing that macros make, for the C
--- grammars of lexogram: a mixin that lexogram:c99_macro embeds into
--- lexogram:c99. doc/grammars/c_macro.md describes it.
+-- grammars of lexogram: a mixin that lexogram:c99 embeds, and the grammars
+-- that extend it inherit. doc/grammars/c_macro.md describes it.
 --
 -- Without the macros expanded, these forms have no C syntax; each of them
 -- has no other reading in C, so a source of C is read as without the
