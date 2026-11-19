@@ -737,6 +737,53 @@ function testcase.parse_skips_alternatives_that_cannot_start()
     })
 end
 
+function testcase.parse_reads_tokens_again_from_the_queue_after_a_rewind()
+    -- a trial reads tokens ahead, which a rewind reads again without
+    -- tokenizing them again; a token whose error stops the analysis is read
+    -- again where the analysis reaches it
+    local compiled = compiled_of({
+        tokens = {
+            name = '[a-z]+',
+            space = '" "+',
+            long = {
+                open = '"[["',
+                close = '"]]"',
+            },
+        },
+        symbols = {
+            '!',
+        },
+        rules = {
+            chunk = 'item*',
+            item = '(name name "!") / name / long',
+        },
+    })
+    local result = parse_ok(compiled, 'a b ! c d [[x]] e')
+    assert.equal(problems_of(result), {})
+
+    -- the first alternative reads the unterminated long and fails; the
+    -- error is reported when the loop of chunk reads it again
+    local _, err = analyzer.parse(compiled, 'a [[x')
+    assert.equal(err.code, 'unterminated_token')
+    assert.equal(err.pos, 3)
+    -- the same in a longer input, past the queue moved to its start
+    local words = string.rep('w ', 100)
+    _, err = analyzer.parse(compiled, words .. 'a [[x')
+    assert.equal(err.code, 'unterminated_token')
+    assert.equal(err.pos, #words + 3)
+    -- many rewinds over a long input give the events of a parse that
+    -- writes each token once
+    local source = string.rep('a b ! c ', 50)
+    result = parse_ok(compiled, source)
+    local texts = {}
+    for _, row in ipairs(rows(result)) do
+        if row[1] == 'TOKEN' then
+            texts[#texts + 1] = source:sub(row[3], row[4] - 1)
+        end
+    end
+    assert.equal(table.concat(texts), source)
+end
+
 function testcase.parse_drops_events_of_a_longer_failed_alternative()
     local compiled = compiled_of({
         symbols = {
