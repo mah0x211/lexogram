@@ -70,7 +70,7 @@ local concat = table.concat
 local sub = string.sub
 local lower = string.lower
 local tokenizer = require('lexogram.tokenizer')
-local tokenize = tokenizer.tokenize
+local scanner = tokenizer.scanner
 local new_input = tokenizer.input
 local quote = require('lexogram.text').quote
 local codegen = require('lexogram.compile.codegen')
@@ -234,8 +234,9 @@ local function parse(compiled, source)
     local qk, qs, qe = {}, {}, {}
     local qh, qt = 1, 0
     local raw_pos = 1
-    -- the source with the values of its lookaheads (see lexogram.tokenizer)
-    local input = new_input(source)
+    -- the token at a position of the source, which keeps the values of its
+    -- lookaheads (see lexogram.tokenizer)
+    local scan = scanner(compiled, new_input(source))
     local failure -- error of a delimited token
 
     -- frames: return address, rule kind, ENTER event number, start, and
@@ -264,7 +265,7 @@ local function parse(compiled, source)
         if raw_pos > len or failure then
             return false
         end
-        local k, stop, problem, at = tokenize(compiled, input, raw_pos)
+        local k, stop, problem, at = scan(raw_pos)
         local keywords = by_base[k]
         if keywords then
             local n = stop - raw_pos

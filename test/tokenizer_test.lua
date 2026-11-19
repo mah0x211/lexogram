@@ -773,3 +773,55 @@ function testcase.compile_keeps_the_leading_automaton_apart()
     })
     assert.is_nil(NESTED.lexer.leading)
 end
+
+-- an a is a only when a b comes after the a's that follow it: a lookahead
+-- without a bound, whose values an input keeps
+local UNBOUNDED = compiled_of({
+    tokens = {
+        a = '"a" (?="a"* "b")',
+        b = '"b"',
+        x = '"a" (?!"a"* "b")',
+    },
+    rules = {
+        chunk = '(a | b | x)*',
+    },
+})
+
+function testcase.scanner_returns_what_tokenize_returns()
+    for _, case in ipairs({
+        {
+            LEADING,
+            '#!/bin/lua\n#t #[x] y',
+        },
+        {
+            NESTED,
+            'a /* b /* c */ */ [[ d [[ ]] [=[ e ]=] |f| /* g',
+        },
+        {
+            LUA,
+            'local s = "x\\"y" -- c\nreturn 0x1F + 2e3 ~= s',
+        },
+        {
+            UNBOUNDED,
+            'aaabaa',
+        },
+    }) do
+        local compiled, source = case[1], case[2]
+        local scan = tokenizer.scanner(compiled, tokenizer.input(source))
+        for pos = 1, #source + 1 do
+            assert.equal({
+                scan(pos),
+            }, {
+                tokenizer.tokenize(compiled, source, pos),
+            })
+        end
+    end
+end
+
+function testcase.scanner_checks_its_arguments_once()
+    local input = tokenizer.input('a')
+    assert.match(assert.throws(tokenizer.scanner, 'x', input),
+                 'compiled must be table, got string', true)
+    assert.match(assert.throws(tokenizer.scanner, LUA, 'a'),
+                 'input must be input, got string', true)
+end

@@ -24,7 +24,9 @@
 -- the tokenizing procedure). Without lookaheads it creates no tables and no
 -- strings per call: the automata are run over the flat arrays with
 -- string.byte, and the close string of a delimited token is matched in
--- place.
+-- place. tokenize checks its arguments on each call; scanner checks them
+-- once and returns a function of the position, for the many calls of a
+-- parse on one input (see lexogram.analyzer).
 --
 -- Close search: the close is a sequence of parts (literals and the
 -- capture). When the first part is a literal, its next occurrence is found
@@ -560,6 +562,82 @@ local function delimited_token(lexer, index, source, pos, open_stop, len)
     return kind, stop
 end
 
+--- cache_of returns what the input state keeps for the predicates of lexer
+--- (see input), or nil when lexer has no predicates: what an input keeps
+--- belongs to the predicates of one compiled object, as another one
+--- numbers its predicates anew.
+--- @param lexer table
+--- @param state table input of input(source)
+--- @return table? cache
+local function cache_of(lexer, state)
+    local predicates = lexer.predicates
+    if not predicates then
+        return nil
+    end
+    local cache = state.caches[predicates]
+    if not cache then
+        cache = {
+            values = {},
+            read = {},
+        }
+        state.caches[predicates] = cache
+    end
+    return cache
+end
+
+--- scan returns what tokenize returns for the token of source at pos
+--- (pos <= len), with the cache of the input for the predicates of lexer,
+--- or nil (see cache_of).
+--- @param lexer table
+--- @param source string
+--- @param pos integer
+--- @param len integer #source
+--- @param state table?
+--- @return integer kind
+--- @return integer stop
+--- @return string? problem
+--- @return integer? at
+local function scan(lexer, source, pos, len, state)
+    local checks = lexer.checks
+    -- leading tokens are tried at the start of input only, before the rest
+    local leading = pos == 1 and lexer.leading
+    if leading then
+        local kind, stop
+        if leading.dispatch then
+            kind, stop =
+                longest_guarded(leading, lexer, source, pos, len, state)
+        else
+            kind, stop = longest(leading, source, pos, len)
+        end
+        if kind then
+            local list = checks and checks[kind]
+            if list then
+                return check(list, lexer.predicates, kind, source, pos, stop)
+            end
+            return kind, stop
+        end
+    end
+    local index, stop = longest(lexer.open, source, pos, len)
+    if index then
+        return delimited_token(lexer, index, source, pos, stop, len)
+    end
+    local kind
+    if lexer.dispatch then
+        kind, stop = longest_guarded(lexer, lexer, source, pos, len, state)
+    else
+        kind, stop = longest(lexer, source, pos, len)
+    end
+    if kind then
+        local list = checks and checks[kind]
+        if list then
+            return check(list, lexer.predicates, kind, source, pos, stop)
+        end
+        return kind, stop
+    end
+    -- kind 1 is INVALID: a byte that starts no token
+    return 1, pos + 1
+end
+
 --- tokenize returns the kind of the token of source starting at pos and the
 --- position after it, or nil at the end of input. At pos 1, a leading token
 --- wins over every other token. A third value
@@ -609,58 +687,32 @@ local function tokenize(compiled, source, pos, mode)
         return nil
     end
     local lexer = compiled.lexer
-    local checks = lexer.checks
-    if state then
-        -- what an input keeps belongs to the predicates of one compiled
-        -- object: another one numbers its predicates anew
-        local predicates = lexer.predicates
-        local cache = predicates and state.caches[predicates]
-        if predicates and not cache then
-            cache = {
-                values = {},
-                read = {},
-            }
-            state.caches[predicates] = cache
+    return scan(lexer, source, pos, len, state and cache_of(lexer, state))
+end
+
+--- scanner returns a function that returns what tokenize(compiled, input,
+--- pos) returns for a position pos, with the arguments checked and the
+--- state of the input found once, for the many calls of a parse on one
+--- input (pos is not checked: 1 <= pos <= #source + 1).
+--- @param compiled table result of lexogram.compile
+--- @param input table input of input(source)
+--- @return function scan(pos)
+local function scanner(compiled, input)
+    if type(compiled) ~= 'table' then
+        error('compiled must be table, got ' .. type(compiled), 2)
+    elseif getmetatable(input) ~= INPUT then
+        error('input must be input, got ' .. type(input), 2)
+    end
+    local lexer = compiled.lexer
+    local source = input.source
+    local len = #source
+    local state = cache_of(lexer, input)
+    return function(pos)
+        if pos > len then
+            return nil
         end
-        state = cache
+        return scan(lexer, source, pos, len, state)
     end
-    -- leading tokens are tried at the start of input only, before the rest
-    local leading = pos == 1 and lexer.leading
-    if leading then
-        local kind, stop
-        if leading.dispatch then
-            kind, stop =
-                longest_guarded(leading, lexer, source, pos, len, state)
-        else
-            kind, stop = longest(leading, source, pos, len)
-        end
-        if kind then
-            local list = checks and checks[kind]
-            if list then
-                return check(list, lexer.predicates, kind, source, pos, stop)
-            end
-            return kind, stop
-        end
-    end
-    local index, stop = longest(lexer.open, source, pos, len)
-    if index then
-        return delimited_token(lexer, index, source, pos, stop, len)
-    end
-    local kind
-    if lexer.dispatch then
-        kind, stop = longest_guarded(lexer, lexer, source, pos, len, state)
-    else
-        kind, stop = longest(lexer, source, pos, len)
-    end
-    if kind then
-        local list = checks and checks[kind]
-        if list then
-            return check(list, lexer.predicates, kind, source, pos, stop)
-        end
-        return kind, stop
-    end
-    -- kind 1 is INVALID: a byte that starts no token
-    return 1, pos + 1
 end
 
 --- input returns an input of source for repeated calls of tokenize on it:
@@ -686,4 +738,5 @@ end
 return {
     tokenize = tokenize,
     input = input,
+    scanner = scanner,
 }
