@@ -228,14 +228,14 @@ The numbers and the escapes were also compared with `load` of Lua 5.1.5 on 2026-
 
 ## Performance
 
-The speed of `lua51` on each runtime. `lua bench/tokenize.lua lexogram:lua51` and `lua bench/parse.lua lexogram:lua51` measure the grammar on the library sources, each wrapped in `do ... end` and repeated to 2.17 MB (best of 5 in one process, CPU time, 2026-11-19, local machine). Load and compile is the time of the first `lexogram.load` of the grammar, which checks it and the grammars it extends (see `lexogram.grammar`), and of `lexogram.compile`, which then copies the compiled object made from that check. On LuaJIT the speed differs between processes, as the traces that the compiler chooses differ; the range of five processes is shown.
+The speed of `lua51` on each runtime. `lua bench/tokenize.lua lexogram:lua51` and `lua bench/parse.lua lexogram:lua51` measure the grammar on the library sources, each wrapped in `do ... end` and repeated to 2.22 MB (best of 5 in one process, CPU time, 2026-11-20, local machine). First load and compile is the time of the first `lexogram.load` of the grammar, which checks it and the grammars it extends (see `lexogram.grammar`), and of `lexogram.compile`, which then copies the compiled object made from that check; saved is the time of `lexogram.undump` of the compiled grammar that `lexogram.dump` wrote (see [saving a compiled grammar](../grammar.md#saving-a-compiled-grammar)). On LuaJIT the speed differs between processes, as the traces that the compiler chooses differ; the range of five processes is shown.
 
-| Runtime | Load and compile | Tokenize | Parse to the event array |
-|---|---|---|---|
-| Lua 5.1 | 0.07 s | 5.0 MB/s (1.1 M tokens/s) | 2.3 MB/s (1.0 M events/s) |
-| Lua 5.4 | 0.06 s | 7.1 MB/s | 3.2 MB/s |
-| Lua 5.5 | 0.06 s | 7.0 MB/s | 3.2 MB/s |
-| LuaJIT 2.1 | 0.05 s | 101 to 106 MB/s | 21 to 31 MB/s |
+| Runtime | First load and compile | Saved (`undump`) | Tokenize | Parse to the event array |
+|---|---|---|---|---|
+| Lua 5.1 | 0.07 s | 0.001 s | 5.0 MB/s (1.0 M tokens/s) | 2.7 MB/s (1.2 M events/s) |
+| Lua 5.4 | 0.06 s | 0.001 s | 6.9 MB/s | 3.8 MB/s |
+| Lua 5.5 | 0.06 s | 0.001 s | 6.9 MB/s | 3.8 MB/s |
+| LuaJIT 2.1 | 0.05 s | 0.001 s | 99 to 105 MB/s | 33 to 36 MB/s |
 
 ## Changes
 
