@@ -414,7 +414,7 @@ sequence = repeat+
 repeat   = primary (("?" | "*" | "+" | count) "+"?)?
          | "(" choice ")" "->" name
 count    = "{" digits ("," digits?)? "}"
-primary  = literal | class | name | "(" choice ")"
+primary  = literal | class | name | "#" (literal | name) | "(" choice ")"
          | "(?=" choice ")" | "(?!" choice ")"
 ```
 
@@ -433,6 +433,7 @@ primary  = literal | class | name | "(" choice ")"
 | `(A)` | Grouping | yes | yes |
 | `(A)->name` | Alias: the range of `A` is reported as the rule `name` | no | yes |
 | `(?=A)`, `(?!A)` | Lookahead, positive and negative: consumes nothing (see [Lookaheads](#lookaheads)) | yes | no |
+| `#"abc"`, `#name` | Prefix match: the next token, or a part at its start (see [Prefix matches](#prefix-matches)) | no | yes (literals and tokens) |
 
 - An alias reports a part of a pattern with the kind of a rule: its range gets the ENTER and EXIT events of the rule `name`, which must be a rule with a kind (a name that does not start with `_`). It lets a grammar write the same construct in two ways and report both alike: `(name "{" "}")->call` is a `call` as `name "(" ")"` in the rule `call` is. An alias of a rule with a kind contains it (`(exp)->x` is an `x` around an `exp`), and the kinds of the compiled object stay those of the rules. The range of an alias is always written in parentheses, also for one reference (`(x)->name`); a repetition of an alias is written with a group around it (`((A)->name)*`), and so is an alias of a repetition (`(A*)->name`). The rule that an alias names counts as used. A diagnostic inside an alias names the rule it is written in. Errors: `alias_not_allowed` in tokens, `invalid_alias` without parentheses before `->` or a rule name after it, `undefined_reference` and `invalid_reference` for the name.
 - A count is written without white space inside the braces; `n` and `m` are at most 1000, `m` is not below `n`, and a count of zero times only (`{0}`, `{0,0}`) is an error. `A{n}` is `n` copies of `A` in sequence, `A{n,}` is `n - 1` copies followed by `A+` (`A*` for `{0,}`), and `A{n,m}` is `n` copies followed by `m - n` nested optional copies (`A{1,3}` is `A (A A?)?`): a grammar that uses counts is analyzed as if written that way, and a diagnostic names the count (`{1,3}+`). The counts of one pattern may make at most 10000 nodes. `A{n}+` is an error, since a fixed count has nothing to make possessive (`invalid_repetition` for these errors).
@@ -465,6 +466,23 @@ number = [[ DIGIT+ ("." DIGIT+)? (?![0-9A-Za-z_.]) ]],
 - A token is chosen by longest match, as below: at each length its lookaheads are evaluated, and the longest length at which the whole pattern holds is the match. In `[0-9]+ (?![a-z])`, the input `12a` gives the token `1`, which is followed by `2`, not a letter; write `(?![0-9a-z])` for "the whole run of digits, not followed by a letter".
 - Two pattern tokens conflict when they can match the same string at the same position with both lookaheads holding on the same input. A token cannot be preferred over another, so tokens that differ by a lookahead are written with complementary conditions (`(?=p)` and `(?!p)`).
 - Cost: a lookahead whose result is known after a bounded number of bytes is evaluated where needed; one without a bound (such as `(?="a"* "b")`) is also evaluated where needed while the bytes it has read on the input stay within the length of the input, and beyond that is computed for every position of the input once, from its end, so that it costs at most about twice the length of the input. `lexogram.parse` keeps this for one call; for repeated calls of `lexogram.tokenize` on one input, make an input of it once with `lexogram.input(source)` and pass that instead of the string (`tokenize(compiled, input, pos)`): the input holds the source with what is computed for it, kept apart for each compiled grammar that it is used with. Given a string, a lookahead without a bound is evaluated where it is needed, which may read up to the end of the input.
+
+### Prefix matches
+
+A token is chosen without the rules (see [How tokens are chosen](#how-tokens-are-chosen)), so a longer token can take the place of two: in Rust, Java and C++, `Vec<Vec<u8>>` ends with `>>`, which the lexer reads as one shift operator, and one token cannot end two nested rules. A prefix match `#X` lets a rule take a part of such a token:
+
+```lua
+symbols = { '<', '>', '>>', '>=', ',', ';' },
+rules = {
+    type = [[ name (#"<" type ("," type)* #">")? ]],
+    shift = [[ name ">>" name ]],
+},
+```
+
+- `#X`, where X is a literal or a token name, matches the next token when it is X. Otherwise, when a part at the start of the next token, shorter than the token, matches X, it takes the longest such part, writes it as a token of the kind of X, and the lexer reads the rest again from where the part ends. The part of a literal is its text (compared without case with `ignore_case`); the part of a token is the longest match of its pattern (its lookaheads see the input after the part). No longer token starts with a delimited token, which is matched as it is.
+- Above, `Vec<Vec<u8>>` ends with two tokens `>`, `Vec<u8>= v` reads `>` then `=`, and `a >> b` keeps its `>>`: `shift` has no prefix match. Grammars without prefix matches keep the longest match of the lexer, which is what C and Lua require: `&&x` is no `& &x` there.
+- After a split, the next token is read again from the rest, not the token after the split one in the input, so for two tokens of lookahead a token that can be split is followed by any token: an alternative that starts with one is told from another that starts with the same token by that token alone (`ambiguous_choice` otherwise; `ambiguous_repetition` for a repetition, which a possessive repetition resolves by taking the element). A prefix match that can split no token that reaches the parser is warned about (`unneeded_prefix`).
+- Errors: `prefix_not_allowed` in tokens, `invalid_prefix` without a literal or a name after `#` (a group is not allowed), `invalid_reference` for a rule name: a rule matches a sequence of tokens, not a part of one. `#X` combines with repetitions, counts and aliases as any element (`#">"*`, `(#">")->close`). `lexogram.tokenize` returns the tokens of the lexer, without splits.
 
 ## How tokens are chosen
 
@@ -509,8 +527,8 @@ The compilation also rejects a repetition of an element that can match nothing (
 | Kind | Codes |
 |---|---|
 | Structure | `invalid_type`, `missing_field`, `unknown_field`, `invalid_key`, `invalid_value`, `invalid_version`, `version_too_new`, `version_too_old`, `empty_item`, `duplicate_item`, `reserved_item`, `invalid_name`, `reserved_name`, `duplicate_name`, `undefined_reference`, `invalid_reference`, `undeclared_literal` |
-| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `lookahead_not_allowed`, `invalid_lookahead`, `invalid_repetition`, `alias_not_allowed`, `invalid_alias`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
+| Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `lookahead_not_allowed`, `invalid_lookahead`, `invalid_repetition`, `alias_not_allowed`, `invalid_alias`, `prefix_not_allowed`, `invalid_prefix`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
 | Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `invalid_contextual`, `unmatchable_pattern`, `automaton_too_large` |
 | Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice`, `ambiguous_repetition` |
-| Warnings | `never_adopted`, `unneeded_possessive`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
+| Warnings | `never_adopted`, `unneeded_possessive`, `unneeded_prefix`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
 | Warnings of the merge | `already_defined` (a [mixin](#mixins) adds what exists; returned by `lexogram.load`, `lexogram.merge` and `lexogram.grammar`, with the mixin as `source`) |
