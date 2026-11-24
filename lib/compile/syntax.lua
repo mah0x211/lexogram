@@ -159,12 +159,16 @@ end
 --- ids of the longer tokens that a prefix node splits (see
 --- lexogram.compile.prefix), without the kinds that it matches as they are
 --- (its item and the contextual keywords read as it) and without the
---- skipped tokens, which never reach the parser.
+--- skipped tokens, which never reach the parser. It also returns the
+--- automata of the items, by kind id, which it fills as it is called: the
+--- runtime finds with them the part of a longer token that the item
+--- matches (a delimited token has none: no longer token starts with it).
 --- @param grammar table
 --- @param lexer table result of lexogram.compile.lexer.build
 --- @param terminal function
 --- @param aliases table kind id -> kind ids
 --- @return function prefix
+--- @return table automata kind id -> automaton
 local function new_prefix(grammar, lexer, terminal, aliases)
     local by_id, id_of, skipped = {}, {}, {}
     for _, def in ipairs(lexer.defs) do
@@ -181,7 +185,7 @@ local function new_prefix(grammar, lexer, terminal, aliases)
             end
         end
     end
-    local cache = {}
+    local cache, automata = {}, {}
     return function(node)
         local list = cache[node]
         if list then
@@ -201,6 +205,7 @@ local function new_prefix(grammar, lexer, terminal, aliases)
             automaton = lexer.prefixes and lexer.prefixes[x]
         end
         if automaton then
+            automata[x] = automaton
             local exact = {
                 [x] = true,
             }
@@ -223,7 +228,7 @@ local function new_prefix(grammar, lexer, terminal, aliases)
         end
         cache[node] = list
         return list
-    end
+    end, automata
 end
 
 --- render returns a k = 2 key (see lexogram.compile.ll) as kind names.
@@ -801,7 +806,9 @@ end
 --- analyze computes the decisions and the syntax diagnostics of grammar.
 --- @param grammar table a grammar that passed the earlier checks
 --- @param lexer_result table result of lexogram.compile.lexer.build
---- @return table? result { analysis, rules, decisions }, nil on error
+--- @return table? result { analysis, rules, alias_of, decisions, prefixes },
+--- nil on error; prefixes holds the automata of the items of the prefix
+--- matches by kind id (see new_prefix)
 --- @return table[] diagnostics { severity, code, segments, pos, message }
 local function analyze(grammar, lexer_result)
     local names, rules = parse_rules(grammar)
@@ -825,9 +832,10 @@ local function analyze(grammar, lexer_result)
         unneeded = {},
     }
     check_skipped(ctx)
+    local prefix_of, automata = new_prefix(grammar, lexer_result, terminal,
+                                           aliases)
     ctx.analysis = ll.analyze(rules, rawget(grammar, 'start'), terminal,
-                              aliases, new_prefix(grammar, lexer_result,
-                                                  terminal, aliases))
+                              aliases, prefix_of)
     if check_termination(ctx) then
         return nil, ctx.diagnostics
     end
@@ -836,12 +844,14 @@ local function analyze(grammar, lexer_result)
         return nil, ctx.diagnostics
     end
     warn_unneeded(ctx)
+    -- also makes the automata of every prefix match
     warn_unneeded_prefix(ctx)
     return {
         analysis = ctx.analysis,
         rules = rules,
         alias_of = alias_of,
         decisions = decisions,
+        prefixes = automata,
     }, ctx.diagnostics
 end
 

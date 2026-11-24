@@ -199,3 +199,201 @@ function testcase.a_split_token_is_followed_by_any_token()
         close = '#gt name ";" | "<" ">>" ";"',
     }), {})
 end
+
+-- the tokens of source as "text:kind", skipped tokens left out, after
+-- checking that the tokens cover the source in order
+local function tokens_of(compiled, source)
+    local result = assert(lexogram.parse(compiled, source))
+    local out, at = {}, 1
+    for i = 1, result.count do
+        if events.op(result, i) == events.TOKEN then
+            local start, stop = events.range(result, i)
+            assert.equal(start, at)
+            at = stop
+            if events.name(result, i) ~= 'space' then
+                out[#out + 1] = events.text(result, i) .. ':' ..
+                                    events.name(result, i)
+            end
+        end
+    end
+    assert.equal(at, #source + 1)
+    return table.concat(out, ' ')
+end
+
+-- a grammar of types closed by ">" and of shifts
+local function types(rules)
+    local g = grammar(rules)
+    g.tokens.gt = nil
+    g.symbols = {
+        '<',
+        '>',
+        '>>',
+        '>=',
+        '>>=',
+        '>>>',
+        '=',
+        ',',
+        ';',
+    }
+    return g
+end
+
+function testcase.a_prefix_match_splits_a_longer_token()
+    local compiled = assert(lexogram.compile(types({
+        chunk = '(type ("=" name)? ";" | name ">>" name ";")*',
+        type = 'name (#"<" type ("," type)* #">")?',
+    })))
+    assert.equal(shape(compiled, 'vec<vec<u8>>;'),
+                 '(chunk (type vec < (type vec < (type u8 ) > ) > ) ; )')
+    -- the parts are tokens of the kind of the prefix match
+    assert.equal(tokens_of(compiled, 'vec<vec<u8>>;'),
+                 'vec:name <:< vec:name <:< u8:name >:> >:> ;:;')
+    assert.equal(tokens_of(compiled, 'vec<u8>= x;'),
+                 'vec:name <:< u8:name >:> =:= x:name ;:;')
+    assert.equal(tokens_of(compiled, 'vec<vec<u8>>= x;'),
+                 'vec:name <:< vec:name <:< u8:name >:> >:> =:= x:name ;:;')
+    assert.equal(tokens_of(compiled, 'a<b<c<d>>>;'),
+                 'a:name <:< b:name <:< c:name <:< d:name >:> >:> >:> ;:;')
+    assert.equal(tokens_of(compiled, 'a<b, c<d>>;'),
+                 'a:name <:< b:name ,:, c:name <:< d:name >:> >:> ;:;')
+    -- a shift is no prefix match
+    assert.equal(tokens_of(compiled, 'a >> b;'), 'a:name >>:>> b:name ;:;')
+    -- one ">" too many
+    local _, err = lexogram.parse(compiled, 'vec<vec<u8>>>;')
+    assert.equal(err.message, 'unexpected ">", expected "=", ";"')
+    assert.equal(err.pos, 13)
+end
+
+function testcase.a_rewind_puts_back_the_token_that_was_split()
+    -- without ">>=", ">>=" is ">>" "=", and ">=" is read from the rest of a
+    -- split ">>": the tokens read after ">>" are dropped
+    local function compile(rules)
+        local g = types(rules)
+        table.remove(g.symbols, 5)
+        return assert(lexogram.compile(g))
+    end
+    local compiled = compile({
+        chunk = 'stat*',
+        stat = 'name ">>" "=" name "," / name #">" ">=" ";"',
+    })
+    assert.equal(tokens_of(compiled, 'a>>=b,'), 'a:name >>:>> =:= b:name ,:,')
+    assert.equal(tokens_of(compiled, 'a>>=;'), 'a:name >:> >=:>= ;:;')
+    -- the first alternative splits ">>" and fails: the second one reads
+    -- ">>" again
+    compiled = compile({
+        chunk = 'stat*',
+        stat = 'name #">" ">" "," / name ">>" name ";"',
+    })
+    assert.equal(tokens_of(compiled, 'a>>b;'), 'a:name >>:>> b:name ;:;')
+    assert.equal(tokens_of(compiled, 'a>>,'), 'a:name >:> >:> ,:,')
+    -- the tokens read after ">>" before the split come back on a rewind
+    compiled = compile({
+        chunk = 'stat*',
+        stat = '(name ">>" "=" "," / name #">" ">=" ";") / name ">>" "=" name',
+    })
+    assert.equal(tokens_of(compiled, 'a>>=b'), 'a:name >>:>> =:= b:name')
+    assert.equal(tokens_of(compiled, 'a>>=,'), 'a:name >>:>> =:= ,:,')
+    assert.equal(tokens_of(compiled, 'a>>=;'), 'a:name >:> >=:>= ;:;')
+end
+
+function testcase.a_possessive_repetition_enters_on_a_token_to_split()
+    local compiled = assert(lexogram.compile(types({
+        chunk = '(name (#">" ">" name)*+ (">>" name)? ";")*',
+    })))
+    assert.equal(tokens_of(compiled, 'a >>b ;'), 'a:name >:> >:> b:name ;:;')
+    assert.equal(tokens_of(compiled, 'a ;'), 'a:name ;:;')
+end
+
+function testcase.a_prefix_match_of_a_token_takes_its_longest_part()
+    -- gt is ">", shadowed by nothing but ">>"
+    local compiled = assert(lexogram.compile(grammar({
+        chunk = '(type ";" | name ">>" name ";")*',
+        type = 'name ("<" type #gt)?',
+    })))
+    assert.equal(tokens_of(compiled, 'a<b<c>>;'),
+                 'a:name <:< b:name <:< c:name >:gt >:gt ;:;')
+    -- the lookaheads of the token see the input after the part
+    local g = grammar({
+        chunk = '(type ";" | name ">>" name ";")*',
+        type = 'name ("<" type (#joint | gt))?',
+    })
+    g.tokens.joint = '">" (?=">")'
+    g.tokens.gt = '">" (?!">")'
+    compiled = assert(lexogram.compile(g))
+    assert.equal(tokens_of(compiled, 'a<b<c>>;'),
+                 'a:name <:< b:name <:< c:name >:joint >:gt ;:;')
+    assert.equal(tokens_of(compiled, 'a<b>;'), 'a:name <:< b:name >:gt ;:;')
+end
+
+function testcase.a_prefix_match_of_a_keyword_splits_a_name()
+    -- blanks do not separate words: "doi" is "do" "i"
+    local g = grammar({
+        chunk = '(#"do" name ";")*',
+    })
+    g.keywords = {
+        'do',
+    }
+    local compiled = assert(lexogram.compile(g))
+    assert.equal(tokens_of(compiled, 'doi;do j;'),
+                 'do:do i:name ;:; do:do j:name ;:;')
+    -- with ignore_case, every spelling
+    g.keywords.ignore_case = true
+    compiled = assert(lexogram.compile(g))
+    assert.equal(tokens_of(compiled, 'DOi;Do j;'),
+                 'DO:do i:name ;:; Do:do j:name ;:;')
+end
+
+function testcase.a_dumped_grammar_keeps_its_prefix_matches()
+    local compiled = assert(lexogram.compile(types({
+        chunk = '(type ";")*',
+        type = 'name (#"<" type #">")?',
+    })))
+    local again = assert(lexogram.undump(assert(lexogram.dump(compiled))))
+    assert.equal(tokens_of(again, 'a<b<c>>;'),
+                 'a:name <:< b:name <:< c:name >:> >:> ;:;')
+end
+
+function testcase.a_prefix_match_of_a_delimited_token_matches_it_as_it_is()
+    local g = grammar({
+        chunk = '(#str ";")*',
+    })
+    g.tokens.str = {
+        open = '"\\""',
+        close = '"\\""',
+    }
+    local compiled = assert(lexogram.compile(g))
+    assert.is_nil(compiled.lexer.prefixes)
+    assert.equal(tokens_of(compiled, '"a";'), '"a":str ;:;')
+    local _, err = lexogram.parse(compiled, 'a;')
+    assert.equal(err.message, 'unexpected name, expected end of input, str')
+end
+
+function testcase.a_prefix_match_fails_on_a_token_without_its_part()
+    local compiled = assert(lexogram.compile(types({
+        chunk = '(name #">" (">" | ">=") ";")*',
+    })))
+    assert.equal(tokens_of(compiled, 'a>>;'), 'a:name >:> >:> ;:;')
+    assert.equal(tokens_of(compiled, 'a>>=;'), 'a:name >:> >=:>= ;:;')
+    local _, err = lexogram.parse(compiled, 'a ;')
+    assert.equal(err.message, 'unexpected ";", expected ">"')
+    assert.equal(err.pos, 3)
+end
+
+function testcase.a_prefix_match_splits_a_contextual_keyword()
+    local g = grammar({
+        chunk = '("<" #"g" name ";" | #name ";")*',
+    })
+    g.keywords = {
+        'g',
+        contextual = {
+            'global',
+        },
+    }
+    local compiled = assert(lexogram.compile(g))
+    -- "global" is read as the keyword where a rule expects it, and is a
+    -- name here: "g" takes its start
+    assert.equal(tokens_of(compiled, '< gx ; < global ;'),
+                 '<:< g:g x:name ;:; <:< g:g lobal:name ;:;')
+    -- "#name" takes a contextual keyword as a name, as it is
+    assert.equal(tokens_of(compiled, 'global ;'), 'global:name ;:;')
+end

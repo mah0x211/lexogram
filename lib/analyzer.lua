@@ -46,6 +46,13 @@
 -- writes it with the base kind. Only tokens of a base kind are compared,
 -- and only those of the length of a keyword read their text.
 --
+-- A prefix match (PREFIX) that splits the next token writes the part that
+-- it takes and replaces the token in the queue by the token tokenized from
+-- the rest. When that token does not end where the split one did, the
+-- tokens read after the split one are dropped, and reading goes on from
+-- its end. Under a backtrack point, a split keeps what it replaced, so
+-- that a rewind puts the queue back as it was.
+--
 -- A backtrack point (TRY) saves the event count, the queue index of the
 -- first raw token not yet written, the call stack depth and the last valid
 -- token; rewinding drops the events after it and moves the head of the
@@ -89,11 +96,16 @@ local JUMP = codegen.JUMP
 local SWITCH = codegen.SWITCH
 local TEST = codegen.TEST
 local TRY = codegen.TRY
+local PREFIX = codegen.PREFIX
+-- codegen.COMMIT is the only other opcode; it is the last branch of the
+-- dispatch below.
+
+-- The key of a second map that takes any token (see codegen); only a
+-- possessive repetition has it, since a choice with it is ambiguous.
+local ANY = codegen.ANY
 -- the number of tokens written from the head of the queue after which an
 -- outermost backtrack point moves the tokens read ahead to its start
 local COMPACT = 64
--- codegen.COMMIT is the only other opcode; it is the last branch of the
--- dispatch below.
 
 -- Event opcodes.
 local TOKEN_EVENT = events_module.TOKEN
@@ -247,7 +259,10 @@ local function parse(compiled, source)
     local next_i
     -- the token at a position of the source, which keeps the values of its
     -- lookaheads (see lexogram.tokenizer)
-    local scan = scanner(compiled, new_input(source))
+    -- and the part of a token that the automaton of a prefix match accepts
+    local scan, part = scanner(compiled, new_input(source))
+    -- absent when the prefix matches name delimited tokens only
+    local prefixes = compiled.lexer.prefixes or {}
     local failure -- error of a delimited token
 
     -- frames: return address, rule kind, ENTER event number, start, and
@@ -260,6 +275,10 @@ local function parse(compiled, source)
     local tstop, ttoken = {}, {}
     local tmax = {}
     local ntry = 0
+    -- what the splits under backtrack points replaced, and the number of
+    -- them at each backtrack point
+    local undo, tundo = {}, {}
+    local nundo = 0
 
     -- expected kinds since the last consumed token
     local exp = {}
@@ -271,20 +290,18 @@ local function parse(compiled, source)
     local far_pos, far_actual = 0, nil
     local far_exp, far_nexp = {}, 0
 
-    --- read appends the next raw token to the queue; false at the end of
-    --- input or after an erroneous delimited token.
-    local function read()
-        if raw_pos > len or failure then
-            return false
-        end
-        local k, stop, problem, at = scan(raw_pos)
+    --- token tokenizes the token at pos and returns its kind and stop: a
+    --- token of a base kind with the text of a contextual keyword gets the
+    --- kind of the keyword, and an erroneous token sets failure.
+    local function token(pos)
+        local k, stop, problem, at = scan(pos)
         local keywords = by_base[k]
         if keywords then
-            local n = stop - raw_pos
+            local n = stop - pos
             for _, kw in ipairs(keywords) do
                 local text = kw[2]
                 if #text == n then
-                    local s = sub(source, raw_pos, stop - 1)
+                    local s = sub(source, pos, stop - 1)
                     if (kw[3] and lower(s) or s) == text then
                         k = kw[1]
                         break
@@ -292,12 +309,10 @@ local function parse(compiled, source)
                 end
             end
         end
-        qt = qt + 1
-        qk[qt], qs[qt], qe[qt] = k, raw_pos, stop
         if problem == 'unterminated' then
             failure = {
                 code = 'unterminated_token',
-                pos = raw_pos,
+                pos = pos,
                 actual = k,
                 expected = {},
                 message = 'unterminated ' .. kind_label(kinds, k),
@@ -305,7 +320,7 @@ local function parse(compiled, source)
         elseif problem == 'invalid' then
             failure = {
                 code = 'invalid_token',
-                pos = raw_pos,
+                pos = pos,
                 actual = k,
                 expected = {},
                 message = 'invalid ' .. kind_label(kinds, k),
@@ -319,8 +334,77 @@ local function parse(compiled, source)
                 message = 'nested delimiter in ' .. kind_label(kinds, k),
             }
         end
+        return k, stop
+    end
+
+    --- read appends the next raw token to the queue; false at the end of
+    --- input or after an erroneous delimited token.
+    local function read()
+        if raw_pos > len or failure then
+            return false
+        end
+        local k, stop = token(raw_pos)
+        qt = qt + 1
+        qk[qt], qs[qt], qe[qt] = k, raw_pos, stop
         raw_pos = stop
         return true
+    end
+
+    --- split replaces the token at queue index i by the token tokenized
+    --- from at, where the part that a prefix match takes ends. When it does
+    --- not end where the replaced token did, the tokens after it are
+    --- dropped and reading goes on from its end. Under a backtrack point,
+    --- what it replaces is kept for a rewind (see restore).
+    local function split(i, at)
+        if ntry > 0 then
+            local tail = {}
+            for j = i + 1, qt do
+                tail[#tail + 1] = qk[j]
+                tail[#tail + 1] = qs[j]
+                tail[#tail + 1] = qe[j]
+            end
+            nundo = nundo + 1
+            undo[nundo] = {
+                i = i,
+                k = qk[i],
+                s = qs[i],
+                e = qe[i],
+                qt = qt,
+                raw_pos = raw_pos,
+                failure = failure,
+                tail = tail,
+            }
+        end
+        local old = qe[i]
+        if qt == i then
+            -- the error of the replaced token, read last, no longer holds
+            failure = nil
+        end
+        local k, stop = token(at)
+        qk[i], qs[i], qe[i] = k, at, stop
+        if stop ~= old then
+            if qt > i then
+                failure = nil
+            end
+            qt, raw_pos = i, stop
+        end
+    end
+
+    --- restore undoes the splits made after the backtrack point n.
+    local function restore(n)
+        while nundo > tundo[n] do
+            local u = undo[nundo]
+            undo[nundo] = nil
+            nundo = nundo - 1
+            local i, tail = u.i, u.tail
+            qk[i], qs[i], qe[i] = u.k, u.s, u.e
+            local at = i
+            for j = 1, #tail, 3 do
+                at = at + 1
+                qk[at], qs[at], qe[at] = tail[j], tail[j + 1], tail[j + 2]
+            end
+            qt, raw_pos, failure = u.qt, u.raw_pos, u.failure
+        end
     end
 
     --- peek returns the kind and queue index of the n-th valid token
@@ -447,6 +531,7 @@ local function parse(compiled, source)
         if ntry == 0 then
             return nil
         end
+        restore(ntry)
         count = tevents[ntry]
         depth = tdepth[ntry]
         fmax[depth] = tmax[ntry]
@@ -491,13 +576,44 @@ local function parse(compiled, source)
                 expect(k)
                 pc = fail()
             end
+        elseif op == PREFIX then
+            local k = code[pc + 1]
+            local t, i = peek(1)
+            local stop
+            if i then
+                if t == k or base_of[t] == k then
+                    stop = qe[i]
+                elseif prefixes[k] then
+                    -- a part shorter than the token
+                    stop = part(k, qs[i], qe[i] - 2)
+                end
+            end
+            if stop then
+                if i > qh then
+                    flush(i)
+                end
+                emit(TOKEN_EVENT, k, qs[i], stop)
+                last_stop, last_token = stop, count
+                if stop == qe[i] then
+                    qh = i + 1
+                else
+                    split(i, stop)
+                    qh = i
+                end
+                next_i = nil
+                nexp = 0
+                pc = pc + 2
+            else
+                expect(k)
+                pc = fail()
+            end
         elseif op == TEST then
             local d = decisions[code[pc + 1]]
             local t = peek(1)
             local take = d.enter[t]
             local second = d.second[t]
             if take and second then
-                take = second[(peek(2))]
+                take = second[(peek(2))] or second[ANY]
             end
             if take then
                 pc = pc + 3
@@ -564,6 +680,7 @@ local function parse(compiled, source)
                 tresume[ntry] = code[pc + 2]
                 tstop[ntry], ttoken[ntry] = last_stop, last_token
                 tmax[ntry] = fmax[depth]
+                tundo[ntry] = nundo
                 pc = pc + 3
             else
                 expect(d.first)
@@ -571,6 +688,13 @@ local function parse(compiled, source)
             end
         else -- COMMIT
             ntry = ntry - 1
+            if ntry == 0 then
+                -- no rewind can reach the splits kept
+                for j = nundo, 1, -1 do
+                    undo[j] = nil
+                end
+                nundo = 0
+            end
             pc = pc + 1
         end
         -- an erroneous delimited token stops the analysis wherever it was

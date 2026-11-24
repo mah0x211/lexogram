@@ -448,3 +448,30 @@ function testcase.generate_is_deterministic()
 
     assert.equal(build(), build())
 end
+
+function testcase.generate_emits_prefix_matches()
+    local compiled = compiled_of(grammar({
+        symbols = {
+            '>',
+            '>>',
+        },
+        rules = {
+            s = '#">" ">"',
+        },
+    }))
+    local gt = compiled.literals['>']
+    assert.equal(compiled.syntax.code, {
+        codegen.PREFIX,
+        gt,
+        MATCH,
+        gt,
+        RET,
+    })
+    -- the automaton of ">", which the analyzer runs over a longer token
+    assert.equal(compiled.lexer.prefixes[gt].accept, {
+        0,
+        1,
+    })
+    -- the key of any token is the one of the analysis
+    assert.equal(codegen.ANY, require('lexogram.compile.ll').ANY)
+end

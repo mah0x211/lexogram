@@ -227,16 +227,18 @@ function holds(predicates, p, source, pos, len, state)
 end
 
 --- longest_guarded is longest for an automaton with dispatch states (whose
---- accept is -1), whose predicates are those of lexer.
+--- accept is -1), whose predicates are those of lexer. The match ends at
+--- last at the latest (len by default); the predicates see the whole input.
 --- @param a table automaton
 --- @param lexer table
 --- @param source string
 --- @param pos integer
 --- @param len integer
 --- @param state table?
+--- @param last integer?
 --- @return integer? kind
 --- @return integer? stop
-local function longest_guarded(a, lexer, source, pos, len, state)
+local function longest_guarded(a, lexer, source, pos, len, state, last)
     local nclasses, classes, trans, accept, dispatch = a.nclasses, a.classes,
                                                        a.trans, a.accept,
                                                        a.dispatch
@@ -248,7 +250,7 @@ local function longest_guarded(a, lexer, source, pos, len, state)
                 1]
     end
     local kind, stop
-    for i = pos, len do
+    for i = pos, last or len do
         s = trans[(s - 1) * nclasses + classes[byte(source, i) + 1]]
         if s == 0 then
             break
@@ -693,10 +695,15 @@ end
 --- scanner returns a function that returns what tokenize(compiled, input,
 --- pos) returns for a position pos, with the arguments checked and the
 --- state of the input found once, for the many calls of a parse on one
---- input (pos is not checked: 1 <= pos <= #source + 1).
+--- input (pos is not checked: 1 <= pos <= #source + 1). It also returns a
+--- function part(k, pos, last) for the prefix matches of the analyzer: the
+--- position after the longest text from pos to last at the latest that the
+--- automaton lexer.prefixes[k] accepts (see lexogram.compile), or nil; its
+--- predicates see the whole input.
 --- @param compiled table result of lexogram.compile
 --- @param input table input of input(source)
 --- @return function scan(pos)
+--- @return function part(k, pos, last)
 local function scanner(compiled, input)
     if type(compiled) ~= 'table' then
         error('compiled must be table, got ' .. type(compiled), 2)
@@ -707,11 +714,21 @@ local function scanner(compiled, input)
     local source = input.source
     local len = #source
     local state = cache_of(lexer, input)
+    local prefixes = lexer.prefixes
     return function(pos)
         if pos > len then
             return nil
         end
         return scan(lexer, source, pos, len, state)
+    end, function(k, pos, last)
+        local a = prefixes[k]
+        local _, stop
+        if a.dispatch then
+            _, stop = longest_guarded(a, lexer, source, pos, len, state, last)
+        else
+            _, stop = longest(a, source, pos, last)
+        end
+        return stop
     end
 end
 
