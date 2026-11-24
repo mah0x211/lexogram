@@ -32,7 +32,9 @@
 -- reads it by its first pattern, and a token that refers to one has a
 -- check of its first pattern, in which the fragment is the intersection of
 -- its patterns and the lookaheads match nothing (they were evaluated when
--- the token was chosen). The grammar must have passed the
+-- the token was chosen). A pattern token that a prefix match of the rules
+-- names ("#name") also has an automaton of its own, which finds the part of
+-- a longer token that it matches. The grammar must have passed the
 -- structure, names and patterns passes of lexogram.check without errors;
 -- in particular every fragment is a pattern string (the names pass rejects
 -- a table named like a fragment), so every reference can be expanded.
@@ -970,20 +972,69 @@ local function build_delimited(grammar, defs, fragments, diagnostics, limits)
     }
 end
 
+--- build_prefixes returns the automata of the pattern tokens named in
+--- prefixed, by kind id; their lookaheads are registered in preds.
+--- @param prefixed table? token name -> true
+--- @param defs table[]
+--- @param lists table[] the definitions of the automata (nfa_defs and
+--- leading_defs)
+--- @param rank table
+--- @param fragments table
+--- @param preds table
+--- @param limits table
+--- @return table? automata kind id -> automaton (nil without any)
+--- @return table? err
+local function build_prefixes(prefixed, defs, lists, rank, fragments, preds,
+                              limits)
+    if not prefixed then
+        return nil
+    end
+    local ids = {}
+    for _, def in ipairs(defs) do
+        if def.kind == 'token' and prefixed[def.name] then
+            ids[def.id] = true
+        end
+    end
+    local out
+    for _, list in ipairs(lists) do
+        for _, def in ipairs(list) do
+            if ids[def.id] then
+                local machine, err = nfa.build({
+                    def,
+                }, fragments, limits.nfa, preds)
+                if not machine then
+                    return nil, err
+                end
+                local d
+                d, err = dfa.build(machine, rank, limits.dfa)
+                if not d then
+                    return nil, err
+                end
+                out = out or {}
+                out[def.id] = d
+            end
+        end
+    end
+    return out
+end
+
 --- build builds the token automaton of grammar.
 --- @param grammar table a grammar that passed the earlier checks
 --- @param limits table? for tests only: { nfa_states, dfa_states }, the
 --- largest number of states of every non-deterministic automaton (passed
 --- to nfa.build) and of every deterministic automaton (passed to dfa.build)
 --- built for the grammar; each defaults to the builder's MAX_STATES
+--- @param prefixed table? the names of the tokens that prefix matches of
+--- the rules name ("#name"): name -> true
 --- @return table? result { defs, dfa, leading, delimited, predicates,
---- checks }, nil when there is an error; leading is the automaton of the
---- leading tokens (nil without them), predicates the automata of the
+--- checks, prefixes }, nil when there is an error; leading is the automaton
+--- of the leading tokens (nil without them), predicates the automata of the
 --- predicates of the lookaheads (see lexogram.compile.lookahead; nil
 --- without them), checks the automata of the checks by kind id (nil
---- without them)
+--- without them), prefixes the automata of the pattern tokens named in
+--- prefixed, by kind id (nil without them)
 --- @return table[] diagnostics { severity, code, segments, pos, message }
-local function build(grammar, limits)
+local function build(grammar, limits, prefixed)
     -- read here, so that an invalid limit raises at the caller of build
     limits = {
         nfa = {
@@ -1058,6 +1109,16 @@ local function build(grammar, limits)
         return too_large(diagnostics, err)
     end
 
+    -- also before the predicates
+    local prefixes
+    prefixes, err = build_prefixes(prefixed, defs, {
+        nfa_defs,
+        leading_defs,
+    }, rank, fragments, preds, limits)
+    if err then
+        return too_large(diagnostics, err)
+    end
+
     local predicates
     if #preds.list > 0 then
         predicates, err = lookahead.build(preds, exact, limits)
@@ -1090,6 +1151,7 @@ local function build(grammar, limits)
         delimited = compiled,
         predicates = predicates,
         checks = checks,
+        prefixes = prefixes,
     }, diagnostics
 end
 

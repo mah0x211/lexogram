@@ -44,6 +44,14 @@
 --     which declares that the greedy choice is intended; otherwise it is
 --     the error ambiguous_repetition. A possessive repetition that is not
 --     ambiguous is warned about (unneeded_possessive).
+--
+-- A prefix match "#X" also takes the longer tokens that it splits (see
+-- lexogram.compile.prefix). The token after a split one is read again from
+-- the rest, so it is any token (ll.ANY) in the sets of two tokens: in a
+-- second map, the key ANY selects whatever the second token is, and two
+-- sets overlap when one has "a ANY" and the other a string that starts
+-- with a. A prefix match that splits no token is warned about
+-- (unneeded_prefix).
 local next = next
 local rawget = rawget
 local ipairs = ipairs
@@ -57,9 +65,11 @@ local byte_less = require('lexogram.compat').byte_less
 local parse = require('lexogram.pattern').parse
 local quote = require('lexogram.text').quote
 local ll = require('lexogram.compile.ll')
+local prefix = require('lexogram.compile.prefix')
 
 local EPS = ll.EPS
 local BASE = ll.BASE
+local ANY = ll.ANY
 
 -- ASCII case folding table: "A".."Z" to "a".."z" (byte ranges in Lua
 -- patterns compare byte values, so this does not depend on the locale).
@@ -136,12 +146,84 @@ local function new_terminal(grammar, defs)
         end
     end
     names[0] = 'end of input'
+    names[ANY] = 'any token'
     return function(node)
         if node.type == 'literal' then
             return exact[node.value] or folded[fold(node.value)]
         end
         return tokens[node.name]
     end, names, aliases
+end
+
+--- new_prefix returns the prefix function for ll.analyze: the sorted kind
+--- ids of the longer tokens that a prefix node splits (see
+--- lexogram.compile.prefix), without the kinds that it matches as they are
+--- (its item and the contextual keywords read as it) and without the
+--- skipped tokens, which never reach the parser.
+--- @param grammar table
+--- @param lexer table result of lexogram.compile.lexer.build
+--- @param terminal function
+--- @param aliases table kind id -> kind ids
+--- @return function prefix
+local function new_prefix(grammar, lexer, terminal, aliases)
+    local by_id, id_of, skipped = {}, {}, {}
+    for _, def in ipairs(lexer.defs) do
+        by_id[def.id] = def
+        if def.kind == 'token' or def.kind == 'delimited' then
+            id_of[def.name] = def.id
+        end
+    end
+    local skip = rawget(grammar, 'skip')
+    if type(skip) == 'table' then
+        for _, name in next, skip do
+            if id_of[name] then
+                skipped[id_of[name]] = true
+            end
+        end
+    end
+    local cache = {}
+    return function(node)
+        local list = cache[node]
+        if list then
+            return list
+        end
+        list = {}
+        local x = terminal(node.item)
+        local automaton
+        if node.item.type == 'literal' then
+            local def = by_id[x]
+            local tbl = rawget(grammar, def.segments[1])
+            local ignore_case = rawget(tbl, 'ignore_case') == true
+            automaton = prefix.literal_automaton(def.name, ignore_case)
+        else
+            -- absent for a delimited token, which no longer token starts
+            -- with
+            automaton = lexer.prefixes and lexer.prefixes[x]
+        end
+        if automaton then
+            local exact = {
+                [x] = true,
+            }
+            for _, y in ipairs(aliases[x] or {}) do
+                exact[y] = true
+            end
+            local found = {}
+            for id in next, prefix.longer(lexer, automaton) do
+                found[id] = true
+                for _, y in ipairs(aliases[id] or {}) do
+                    found[y] = true
+                end
+            end
+            for id in next, found do
+                if not exact[id] and not skipped[id] then
+                    list[#list + 1] = id
+                end
+            end
+            sort(list)
+        end
+        cache[node] = list
+        return list
+    end
 end
 
 --- render returns a k = 2 key (see lexogram.compile.ll) as kind names.
@@ -178,6 +260,37 @@ local function intersect(s, t)
     for k in next, s do
         if t[k] then
             out[k] = true
+        end
+    end
+    return out
+end
+
+--- overlap returns the strings of two k = 2 sets that the same input can
+--- start with: the keys of s that are in t, and "a ANY" for a split kind a
+--- of one set (a key "a ANY") when the other set has a key that starts
+--- with a.
+--- @param s table
+--- @param t table
+--- @return table
+local function overlap(s, t)
+    local out = intersect(s, t)
+    for _, sets in ipairs({
+        pair(s, t),
+        pair(t, s),
+    }) do
+        local heads = {}
+        for key in next, sets[1] do
+            if key ~= EPS and key % BASE == ANY + 1 then
+                heads[floor(key / BASE)] = true
+            end
+        end
+        if next(heads) then
+            for key in next, sets[2] do
+                local a = floor(key / BASE)
+                if key ~= EPS and heads[a] then
+                    out[a * BASE + ANY + 1] = true
+                end
+            end
         end
     end
     return out
@@ -469,7 +582,7 @@ local function choice_decision(ctx, name, node, conts)
     end
     for i = 1, #node.items do
         for j = i + 1, #node.items do
-            local shared = smallest(intersect(first2[i], first2[j]))
+            local shared = smallest(overlap(first2[i], first2[j]))
             if shared then
                 add_diagnostic(ctx, 'error', 'ambiguous_choice',
                                pair('rules', shown(ctx, name)), node.pos,
@@ -578,7 +691,7 @@ local function repeat_decision(ctx, name, node, conts)
         end
         second[t] = map
     end
-    local greedy = smallest(intersect(enter2, conts[node][2]))
+    local greedy = smallest(overlap(enter2, conts[node][2]))
     -- a repetition of a count {n,m} is told by its count, and the nodes of
     -- a possessive count share a group, which needs the "+" when any of
     -- them is ambiguous
@@ -651,6 +764,28 @@ local function warn_unneeded(ctx)
     end
 end
 
+--- warn_unneeded_prefix warns about the prefix matches that can split no
+--- token: no longer token that reaches the parser can start with a part
+--- that their item matches. It runs only for a grammar without errors.
+--- @param ctx table
+local function warn_unneeded_prefix(ctx)
+    local a = ctx.analysis
+    for _, name in ipairs(ctx.names) do
+        for _, node in ipairs(preorder(ctx.rules[name])) do
+            if node.type == 'prefix' and #a.prefix(node) == 0 then
+                local rule = shown(ctx, name)
+                add_diagnostic(ctx, 'warning', 'unneeded_prefix',
+                               pair('rules', rule), node.pos,
+                               'rules.' .. rule .. ': "#" is not needed: no' ..
+                                   ' token that reaches the parser can' ..
+                                   ' start with ' ..
+                                   ctx.names_of[ctx.terminal(node.item)] ..
+                                   ' and be longer')
+            end
+        end
+    end
+end
+
 --- has_error returns true if ctx has an error diagnostic.
 --- @param ctx table
 --- @return boolean
@@ -690,8 +825,9 @@ local function analyze(grammar, lexer_result)
         unneeded = {},
     }
     check_skipped(ctx)
-    ctx.analysis =
-        ll.analyze(rules, rawget(grammar, 'start'), terminal, aliases)
+    ctx.analysis = ll.analyze(rules, rawget(grammar, 'start'), terminal,
+                              aliases, new_prefix(grammar, lexer_result,
+                                                  terminal, aliases))
     if check_termination(ctx) then
         return nil, ctx.diagnostics
     end
@@ -700,6 +836,7 @@ local function analyze(grammar, lexer_result)
         return nil, ctx.diagnostics
     end
     warn_unneeded(ctx)
+    warn_unneeded_prefix(ctx)
     return {
         analysis = ctx.analysis,
         rules = rules,

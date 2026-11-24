@@ -1549,6 +1549,25 @@ end
 
 -- lexical pass
 
+--- prefixed_tokens returns the names of the tokens that the prefix matches
+--- of the rules name ("#name"), or nil without any.
+--- @param ctx table
+--- @return table? name -> true
+local function prefixed_tokens(ctx)
+    local names
+    for _, entry in ipairs(ctx.patterns) do
+        if entry.rule then
+            walk(entry.ast, function(node)
+                if node.type == 'prefix' and node.item.type == 'ref' then
+                    names = names or {}
+                    names[node.item.name] = true
+                end
+            end)
+        end
+    end
+    return names
+end
+
 --- check_lexical builds the token automaton and adds its diagnostics. It
 --- runs only for a grammar without errors, which lexogram.compile.lexer
 --- requires.
@@ -1557,7 +1576,8 @@ local function check_lexical(ctx)
     if has_error(ctx) then
         return
     end
-    local result, diagnostics = build_lexer(ctx.grammar)
+    local result, diagnostics = build_lexer(ctx.grammar, nil,
+                                            prefixed_tokens(ctx))
     ctx.lexer = result
     for _, d in ipairs(diagnostics) do
         add(ctx, d.severity, d.code, d.segments, d.pos, d.message)

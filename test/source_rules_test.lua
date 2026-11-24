@@ -137,6 +137,7 @@ function testcase.module_files_lists_rockspec_modules()
         'lib/compile/ll.lua',
         'lib/compile/lookahead.lua',
         'lib/compile/nfa.lua',
+        'lib/compile/prefix.lua',
         'lib/compile/syntax.lua',
         'lib/compile/utf8range.lua',
         'lib/dump.lua',

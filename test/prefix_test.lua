@@ -57,6 +57,18 @@ local function errors_of(rules)
     return out
 end
 
+-- the warnings of a grammar, as "code path pos: message"
+local function warnings_of(g)
+    local out = {}
+    for _, d in ipairs(lexogram.check(g)) do
+        if d.severity == 'warning' then
+            out[#out + 1] = d.code .. ' ' .. d.path .. ' ' .. tostring(d.pos) ..
+                                ': ' .. d.message
+        end
+    end
+    return out
+end
+
 function testcase.a_prefix_match_names_a_literal_or_a_token()
     -- a token and a declared literal
     assert.equal(errors_of({
@@ -109,4 +121,81 @@ function testcase.a_prefix_match_matches_the_token_it_names()
     assert.equal(shape(compiled, 'vec<vec<u8> >;'),
                  '(chunk (type vec < (type vec < (type u8 ) > ) > ) ; )')
     assert.equal(shape(compiled, 'a >> b;'), '(chunk a >> b ; )')
+end
+
+function testcase.a_prefix_match_that_splits_no_token_is_not_needed()
+    -- ">>" starts with gt and with ">", not with "<" or ";"
+    assert.equal(warnings_of(grammar({
+        chunk = '(name #";" | #"<" name ">>" #gt)*',
+    })), {
+        'unneeded_prefix rules.chunk 7: rules.chunk: "#" is not needed: no' ..
+            ' token that reaches the parser can start with ";" and be longer',
+        'unneeded_prefix rules.chunk 14: rules.chunk: "#" is not needed: no' ..
+            ' token that reaches the parser can start with "<" and be longer',
+    })
+    -- a longer name is still a name, which "#name" matches as it is
+    local g = grammar({
+        chunk = '(#name ";" | name ">>" name gt "<")*',
+    })
+    assert.equal(warnings_of(g), {
+        'unneeded_prefix rules.chunk 2: rules.chunk: "#" is not needed: no' ..
+            ' token that reaches the parser can start with name and be longer',
+    })
+    -- a skipped token never reaches the parser: "--" is a comment
+    g = grammar({
+        chunk = '(name #"-" name ";" | name ">>" gt "<")*',
+    })
+    g.tokens.comment = '"--" [^\\n]*'
+    g.skip[2] = 'comment'
+    g.symbols[4] = '-'
+    assert.equal(warnings_of(g), {
+        'unneeded_prefix rules.chunk 7: rules.chunk: "#" is not needed: no' ..
+            ' token that reaches the parser can start with "-" and be longer',
+    })
+    -- no longer token starts with a delimited token
+    g = grammar({
+        chunk = '(#str name ";" | name ">>" gt "<")*',
+    })
+    g.tokens.str = {
+        open = '"\\""',
+        close = '"\\""',
+    }
+    assert.equal(warnings_of(g), {
+        'unneeded_prefix rules.chunk 2: rules.chunk: "#" is not needed: no' ..
+            ' token that reaches the parser can start with str and be longer',
+    })
+end
+
+function testcase.a_split_token_is_followed_by_any_token()
+    -- the rest of a split ">>" is read again, so the token after ">>" does
+    -- not tell the alternatives
+    assert.equal(errors_of({
+        chunk = 'close*',
+        close = '#gt gt name ";" | ">>" name "<"',
+    }), {
+        'ambiguous_choice rules.close 1: rules.close: alternatives 1 and 2' ..
+            ' of the choice can both start with ">>" any token',
+    })
+    assert.equal(errors_of({
+        chunk = '(name (#gt name)* ">>" name ";")*',
+    }), {
+        'ambiguous_repetition rules.chunk 8: rules.chunk: the repetition can' ..
+            ' both continue and end with ">>" any token; rewrite the rule, or' ..
+            ' write *+ to always take the element',
+    })
+    assert.equal(errors_of({
+        chunk = '(name (#gt name)*+ ">>" name ";")*',
+    }), {})
+    -- ">>" alone tells them
+    assert.equal(errors_of({
+        chunk = 'close*',
+        close = '#gt name ";" | ">>" ";"',
+    }), {
+        'ambiguous_choice rules.close 1: rules.close: alternatives 1 and 2' ..
+            ' of the choice can both start with ">>" any token',
+    })
+    assert.equal(errors_of({
+        chunk = 'close*',
+        close = '#gt name ";" | "<" ">>" ";"',
+    }), {})
 end

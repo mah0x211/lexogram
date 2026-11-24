@@ -46,6 +46,13 @@
 -- table { [1 * BASE + 3] = true, [1 * BASE] = true, [-1] = true } and its
 -- array form is { { 1 }, { 1, 2 } } (EPS is reported as nullable).
 --
+-- A prefix match "#X" (a prefix node) matches the token X and splits a
+-- longer token that starts with a part that X matches: the caller's
+-- prefix(node) gives the kinds of those longer tokens. After a split, the
+-- next token is read again from the rest, which is not the token after it
+-- in the input, so a split kind a stands in a k = 2 set for the string "a
+-- ANY": a, then any token (ANY is a kind id that no grammar has).
+--
 -- Fixed points: FIRST_k of every rule starts empty and is recomputed from
 -- the rule ASTs, in name order, until no set grows; FOLLOW_k likewise,
 -- starting from the end of input after start. Sets only grow, and each is
@@ -66,6 +73,9 @@ local EPS = -1
 -- and later, which would turn every key and decoded kind id into a float
 -- (3.0 instead of 3) and make results differ between runtimes.
 local BASE = 16777216
+-- The kind id of any token after a split kind (see above); below BASE, so
+-- that "a ANY" is a key of its own, and above every kind id of a grammar.
+local ANY = BASE - 2
 
 -- string sets
 
@@ -239,10 +249,12 @@ local function combine(a, node, res, k, sets)
         end
         return out
     elseif t == 'prefix' then
-        -- the token of its item (the longer tokens that it can split are
-        -- not counted yet: WI-18)
+        -- the token of its item, and the longer tokens that it splits
         local out = {}
         union(out, res[node.item])
+        for _, x in ipairs(a.prefix(node)) do
+            out[k == 1 and x or x * BASE + ANY + 1] = true
+        end
         return out
     end
     local s = res[node.item]
@@ -584,6 +596,8 @@ end
 --- @param terminal function(node) kind id of a literal or token ref, nil
 --- for a rule ref
 --- @param aliases table? kind id -> array of the kind ids it also matches
+--- @param prefix function? prefix(node): the kind ids of the longer tokens
+--- that the prefix node splits (none without it)
 --- @return table analysis {
 ---   nullable  = rule -> boolean,
 ---   first1, follow1 = rule -> sorted kind ids (follow1 may contain 0),
@@ -592,7 +606,7 @@ end
 ---   first_sets, follow_sets = k -> rule -> key set (with EPS), used by
 ---   first and walk,
 ---   node_sets = k -> node -> FIRST_k key set, kept by first and walk }
-local function analyze(rules, start, terminal, aliases)
+local function analyze(rules, start, terminal, aliases, prefix)
     local names = {}
     for name in next, rules do
         names[#names + 1] = name
@@ -604,6 +618,9 @@ local function analyze(rules, start, terminal, aliases)
         start = start,
         terminal = terminal,
         aliases = aliases or {},
+        prefix = prefix or function()
+            return {}
+        end,
         names = names,
         first_sets = {},
         follow_sets = {},
@@ -633,6 +650,7 @@ end
 return {
     EPS = EPS,
     BASE = BASE,
+    ANY = ANY,
     analyze = analyze,
     first = first,
     walk = walk,
