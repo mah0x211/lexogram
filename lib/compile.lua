@@ -90,6 +90,14 @@
 --                        the array has the automata of the patterns after
 --                        the first of a token written as an array. Absent
 --                        without such tokens
+--     prefixes           with prefix matches ("#X") only: map from the
+--                        kind id of X to an automaton of the same shape
+--                        (its dispatch states use the predicates above)
+--                        that accepts the text of X (literal) or the
+--                        strings of X (pattern token); absent for a
+--                        delimited token. The analyzer finds with it the
+--                        part of a longer token that X matches (see the
+--                        PREFIX instruction of lexogram.compile.codegen)
 --     open               an automaton of the same shape over the opens of
 --                        the delimited tokens; accept holds indexes into
 --                        delimited
@@ -319,6 +327,12 @@ local function build_object(grammar, lexer, syntax)
     automata.open = automaton(lexer.delimited.open)
     automata.delimited = delimited_entries(lexer.delimited.entries)
     automata.predicates = predicate_automata(lexer.predicates)
+    if next(syntax.prefixes) then
+        automata.prefixes = {}
+        for id, d in next, syntax.prefixes do
+            automata.prefixes[id] = automaton(d)
+        end
+    end
     if lexer.checks then
         automata.checks = {}
         for id, list in next, lexer.checks do

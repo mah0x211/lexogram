@@ -70,7 +70,7 @@ local result = assert(lexogram.parse(compiled, '1 + (2 * 3)'))
 
 ## Goals
 
-- **A simple notation close to EBNF.** Tokens and rules are written in one small notation: literals, references, sequences, choices, repetitions, counts (`{n,m}`) and aliases (`(P)->name`). lexogram does not bring in the notation of a regular expression engine.
+- **A simple notation close to EBNF.** Tokens and rules are written in one small notation: literals, references, sequences, choices, repetitions, counts (`{n,m}`), aliases (`(P)->name`) and prefix matches (`#X`). lexogram does not bring in the notation of a regular expression engine.
 - **Complex analysis through structured settings, not notation.** What a small notation cannot say is said by the fields of the grammar table: delimited token tables for strings and comments, prefixed tables, leading tokens, contextual keywords, grammars that extend others, and mixins. A new feature is added as a setting first; a new operator is the last resort, and only the minimum one.
 - **A lossless result.** The result is a flat array of integers, four for each event (a token, the start of a rule, its end). The tokens cover the source in order, without gaps or overlaps, including white space and comments, so a tool can rebuild the source byte for byte.
 - **Predictable cost.** A grammar is checked and compiled into tables before parsing: a deterministic lexer that chooses the longest match, and an LL(2) parser that chooses between alternatives by the next two tokens. Ordered choice (`/`) tries alternatives only where a grammar asks for it.
@@ -104,6 +104,8 @@ Rules only
   A?+  A*+  A++  A{n,}+  A{n,m}+
                              possessive: take the element where it is ambiguous
   (A)->name                  alias: report the range of A as the rule name
+  #"abc"   #name             prefix match: the next token, or a part at its
+                             start (a ">" out of ">>" in Vec<Vec<u8>>)
   _name                      helper rule: produces no events
 ```
 

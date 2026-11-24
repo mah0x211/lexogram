@@ -1323,13 +1323,18 @@ local function check_alias(ctx, entry, node)
     end
 end
 
--- Kinds a token pattern and a rule pattern may refer to.
+-- Kinds a token pattern and a rule pattern may refer to, and a prefix match
+-- "#" may name: it matches a part of one token, and a rule matches a
+-- sequence of tokens.
 local TOKEN_REFS = {
     fragment = true,
 }
 local RULE_REFS = {
     token = true,
     rule = true,
+}
+local PREFIX_REFS = {
+    token = true,
 }
 
 --- visit_token_pattern records the fragments used by a token pattern and
@@ -1356,11 +1361,19 @@ local function visit_rule_pattern(ctx, entry, usage)
     local edges = usage.edges[entry.rule] or {}
     usage.edges[entry.rule] = edges
     local decl = usage.declarations
+    -- the refs named by a prefix match, which walk visits after it
+    local prefixed = {}
     walk(entry.ast, function(node)
         if node.type == 'ref' then
             usage.names[node.name] = true
             edges[#edges + 1] = node.name
-            check_pattern_ref(ctx, entry, node, RULE_REFS, 'token or rule')
+            if prefixed[node] then
+                check_pattern_ref(ctx, entry, node, PREFIX_REFS, 'token')
+            else
+                check_pattern_ref(ctx, entry, node, RULE_REFS, 'token or rule')
+            end
+        elseif node.type == 'prefix' then
+            prefixed[node.item] = true
         elseif node.type == 'alias' then
             -- the aliased rule gives the kind; it counts as used
             usage.names[node.name] = true
@@ -1536,6 +1549,25 @@ end
 
 -- lexical pass
 
+--- prefixed_tokens returns the names of the tokens that the prefix matches
+--- of the rules name ("#name"), or nil without any.
+--- @param ctx table
+--- @return table? name -> true
+local function prefixed_tokens(ctx)
+    local names
+    for _, entry in ipairs(ctx.patterns) do
+        if entry.rule then
+            walk(entry.ast, function(node)
+                if node.type == 'prefix' and node.item.type == 'ref' then
+                    names = names or {}
+                    names[node.item.name] = true
+                end
+            end)
+        end
+    end
+    return names
+end
+
 --- check_lexical builds the token automaton and adds its diagnostics. It
 --- runs only for a grammar without errors, which lexogram.compile.lexer
 --- requires.
@@ -1544,7 +1576,8 @@ local function check_lexical(ctx)
     if has_error(ctx) then
         return
     end
-    local result, diagnostics = build_lexer(ctx.grammar)
+    local result, diagnostics = build_lexer(ctx.grammar, nil,
+                                            prefixed_tokens(ctx))
     ctx.lexer = result
     for _, d in ipairs(diagnostics) do
         add(ctx, d.severity, d.code, d.segments, d.pos, d.message)

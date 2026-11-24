@@ -864,3 +864,49 @@ function testcase.analyze_is_deterministic()
 
     assert.equal(run(), run())
 end
+
+function testcase.analyze_counts_the_tokens_that_a_prefix_match_splits()
+    local rules = {
+        s = P('#">" "x" | "y"'),
+    }
+    local ids = {
+        ['>'] = 1,
+        ['>>'] = 2,
+        ['x'] = 3,
+        ['y'] = 4,
+    }
+    local function terminal(node)
+        return ids[node.value]
+    end
+    -- ">" as it is, then "x"; a split ">>", then any token
+    local a = ll.analyze(rules, 's', terminal, nil, function(node)
+        assert.equal(node.type, 'prefix')
+        return {
+            2,
+        }
+    end)
+    assert.equal(a.first1.s, {
+        1,
+        2,
+        4,
+    })
+    assert.equal(a.first2.s, {
+        {
+            1,
+            3,
+        },
+        {
+            2,
+            ll.ANY,
+        },
+        {
+            4,
+        },
+    })
+    -- without the prefix function, a prefix match splits no token
+    a = ll.analyze(rules, 's', terminal)
+    assert.equal(a.first1.s, {
+        1,
+        4,
+    })
+end

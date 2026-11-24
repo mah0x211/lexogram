@@ -1492,6 +1492,94 @@ function testcase.parse_reads_aliases_in_rules()
     })
 end
 
+local function prefix(pos, item)
+    return {
+        type = 'prefix',
+        pos = pos,
+        item = item,
+    }
+end
+
+function testcase.parse_reads_prefix_matches_in_rules()
+    -- a literal or a name, with or without spaces after the "#"
+    assert.equal(parse_ok('#">"', 'rules'), prefix(1, lit(2, '>')))
+    assert.equal(parse_ok('# gt', 'rules'), prefix(1, ref(3, 'gt')))
+    assert.equal(parse_ok('"<" t #">"', 'rules'), seq({
+        lit(1, '<'),
+        ref(5, 't'),
+        prefix(7, lit(8, '>')),
+    }))
+    -- a postfix operator, a count and an alias apply to the prefix match
+    assert.equal(parse_ok('#">"*', 'rules'),
+                 postfix('star', prefix(1, lit(2, '>'))))
+    assert.equal(parse_ok('#">"*+', 'rules'), {
+        type = 'star',
+        pos = 1,
+        item = prefix(1, lit(2, '>')),
+        possessive = true,
+    })
+    local ast = parse_ok('#">"{2}', 'rules')
+    assert.equal(ast, seq({
+        prefix(1, lit(2, '>')),
+        prefix(1, lit(2, '>')),
+    }))
+    assert.not_rawequal(ast.items[1], ast.items[2])
+    assert.equal(parse_ok('(#">")->c', 'rules'), {
+        type = 'alias',
+        pos = 2,
+        item = prefix(2, lit(3, '>')),
+        name = 'c',
+        name_pos = 9,
+    })
+    check_errors({
+        -- a literal or a name must follow
+        {
+            '#',
+            2,
+            'invalid_prefix',
+        },
+        {
+            '"a" #',
+            6,
+            'invalid_prefix',
+        },
+        {
+            '#(">")',
+            2,
+            'invalid_prefix',
+        },
+        {
+            '##">"',
+            2,
+            'invalid_prefix',
+        },
+        {
+            '# | "a"',
+            3,
+            'invalid_prefix',
+        },
+        -- the range of an alias is written in parentheses
+        {
+            '#">"->c',
+            5,
+            'invalid_alias',
+        },
+    }, 'rules')
+    -- a token pattern matches bytes, not tokens
+    check_errors({
+        {
+            '#">"',
+            1,
+            'prefix_not_allowed',
+        },
+        {
+            '"a" #">"',
+            5,
+            'prefix_not_allowed',
+        },
+    })
+end
+
 function testcase.parse_reads_lookaheads_in_tokens()
     local ast = parse_ok('"x" (?!("ab" | "ac")) (?= DIGIT "-"*)')
     assert.equal(ast.type, 'seq')

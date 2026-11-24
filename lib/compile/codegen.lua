@@ -47,6 +47,14 @@
 --                decisions[d].first, continue at address a; otherwise push a
 --                backtrack point resuming at a and continue
 --   COMMIT       pop the innermost backtrack point (the alternative matched)
+--   PREFIX k     prefix match "#X" of the kind k of X: consume a token of
+--                kind k, or else split the next token: when the automaton
+--                lexer.prefixes[k] accepts a part of its text shorter than
+--                it, from its start, the longest such part is written as a
+--                token of kind k and the rest is tokenized again; or fail
+--
+-- In a second map of a decision (see lexogram.compile.syntax), the key ANY
+-- stands for any token after a token that a prefix match splits.
 --
 -- A star is "L: TEST d E; <item>; JUMP L; E:", a plus is "L: <item>;
 -- TEST d E; JUMP L; E:" and an opt is "TEST d E; <item>; E:". An unordered
@@ -72,6 +80,10 @@ local SWITCH = 6
 local TEST = 7
 local TRY = 8
 local COMMIT = 9
+local PREFIX = 10
+-- The kind id of any token in a second map: lexogram.compile.ll.ANY (not
+-- required here, so that the analyzer does not load the analysis).
+local ANY = 16777214
 -- Number of operands of each opcode.
 local OPERANDS = {
     [MATCH] = 1,
@@ -83,6 +95,7 @@ local OPERANDS = {
     [TEST] = 2,
     [TRY] = 2,
     [COMMIT] = 0,
+    [PREFIX] = 1,
 }
 -- Byte value of "_", which starts the name of a rule without a kind.
 local UNDERSCORE = 95
@@ -293,6 +306,8 @@ local function node_tasks(g, node)
         end
     elseif t == 'seq' then
         return node.items
+    elseif t == 'prefix' then
+        emit(g, PREFIX, g.terminal(node.item))
     elseif t == 'choice' and node.ordered then
         return try_tasks(g, node, g.source[node])
     elseif t == 'choice' then
@@ -423,5 +438,7 @@ return {
     TEST = TEST,
     TRY = TRY,
     COMMIT = COMMIT,
+    PREFIX = PREFIX,
+    ANY = ANY,
     generate = generate,
 }
