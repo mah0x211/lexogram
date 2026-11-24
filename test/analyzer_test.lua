@@ -1034,6 +1034,46 @@ function testcase.parse_reports_unterminated_tokens()
     })
 end
 
+function testcase.parse_reports_an_erroneous_skipped_token_at_the_end()
+    local compiled = compiled_of({
+        tokens = {
+            name = '[a-z]+',
+            space = '[ \\n]+',
+            comment = {
+                open = '"/*"',
+                close = '"*/"',
+                nest = 'error',
+            },
+        },
+        skip = {
+            'space',
+            'comment',
+        },
+        rules = {
+            chunk = 'name',
+        },
+    })
+    parse_ok(compiled, 'a /* b */')
+
+    -- after the last token: unterminated, or with a nested open (reading
+    -- stops at such a token, so what follows is not read)
+    local result, err = analyzer.parse(compiled, 'a /* b')
+    assert.is_nil(result)
+    assert.equal(err, {
+        code = 'unterminated_token',
+        pos = 3,
+        line = 1,
+        column = 3,
+        actual = compiled.names.comment,
+        expected = {},
+        message = 'unterminated comment',
+    })
+    result, err = analyzer.parse(compiled, 'a /* /* */ b')
+    assert.is_nil(result)
+    assert.equal(err.code, 'nested_delimiter')
+    assert.equal(err.pos, 6)
+end
+
 function testcase.parse_handles_deep_input_without_the_lua_stack()
     local compiled = compiled_of({
         symbols = {
