@@ -649,13 +649,16 @@ local function parse(compiled, source)
             pc = fret[depth]
             depth = depth - 1
             if pc == 0 then
-                -- the start rule returned: the input must end here
-                if peek(1) == END then
+                -- the start rule returned: the input must end here, and
+                -- an erroneous token read before its end (a skipped one)
+                -- stops the analysis below
+                if peek(1) ~= END then
+                    expect(END)
+                    pc = fail()
+                elseif not failure then
                     flush(qt + 1)
                     break
                 end
-                expect(END)
-                pc = fail()
             end
         elseif op == JUMP then
             pc = code[pc + 1]
