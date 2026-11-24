@@ -1323,13 +1323,18 @@ local function check_alias(ctx, entry, node)
     end
 end
 
--- Kinds a token pattern and a rule pattern may refer to.
+-- Kinds a token pattern and a rule pattern may refer to, and a prefix match
+-- "#" may name: it matches a part of one token, and a rule matches a
+-- sequence of tokens.
 local TOKEN_REFS = {
     fragment = true,
 }
 local RULE_REFS = {
     token = true,
     rule = true,
+}
+local PREFIX_REFS = {
+    token = true,
 }
 
 --- visit_token_pattern records the fragments used by a token pattern and
@@ -1356,11 +1361,19 @@ local function visit_rule_pattern(ctx, entry, usage)
     local edges = usage.edges[entry.rule] or {}
     usage.edges[entry.rule] = edges
     local decl = usage.declarations
+    -- the refs named by a prefix match, which walk visits after it
+    local prefixed = {}
     walk(entry.ast, function(node)
         if node.type == 'ref' then
             usage.names[node.name] = true
             edges[#edges + 1] = node.name
-            check_pattern_ref(ctx, entry, node, RULE_REFS, 'token or rule')
+            if prefixed[node] then
+                check_pattern_ref(ctx, entry, node, PREFIX_REFS, 'token')
+            else
+                check_pattern_ref(ctx, entry, node, RULE_REFS, 'token or rule')
+            end
+        elseif node.type == 'prefix' then
+            prefixed[node.item] = true
         elseif node.type == 'alias' then
             -- the aliased rule gives the kind; it counts as used
             usage.names[node.name] = true

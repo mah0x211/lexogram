@@ -351,7 +351,7 @@ local function productive_node(root, prod, terminal)
                 v = terminal(node) ~= nil or prod[node.name] == true
             elseif t == 'opt' or t == 'star' then
                 v = true
-            elseif t == 'plus' then
+            elseif t == 'plus' or t == 'prefix' then
                 v = res[node.item]
             else
                 -- seq: every item; choice: some alternative

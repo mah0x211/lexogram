@@ -293,6 +293,12 @@ local function node_tasks(g, node)
         end
     elseif t == 'seq' then
         return node.items
+    elseif t == 'prefix' then
+        -- matches the token of its item; splitting a longer token is not
+        -- implemented yet (WI-18)
+        return {
+            node.item,
+        }
     elseif t == 'choice' and node.ordered then
         return try_tasks(g, node, g.source[node])
     elseif t == 'choice' then

@@ -35,9 +35,11 @@
 -- possessive, group, a table that they share. In the 'rules' context, an
 -- alias "->" name after a group gives { type = 'alias', item, name,
 -- name_pos }: the range of the item is reported as the rule name. In the
--- 'tokens' context,
--- the names of the captures of a delimited token table may also be given;
--- they resolve to capture nodes.
+-- 'rules' context, "#" before a literal or a name gives { type = 'prefix',
+-- pos, item }: a prefix match, which matches the next token or a part at
+-- its start (the item must name a token, which lexogram.check verifies).
+-- In the 'tokens' context, the names of the captures of a delimited token
+-- table may also be given; they resolve to capture nodes.
 -- Groups may be nested at most MAX_NESTING levels deep (nesting_too_deep).
 local type = type
 local error = error
@@ -66,6 +68,7 @@ local LF = 10
 local CR = 13
 local SPACE = 32
 local DQUOTE = 34
+local HASH = 35
 local LPAREN = 40
 local RPAREN = 41
 local STAR = 42
@@ -765,6 +768,21 @@ end
 local function accept_alias()
 end
 
+--- reject_prefix rejects a prefix match in a context without them.
+--- @param _ table parser state
+--- @param pos integer position of the "#"
+local function reject_prefix(_, pos)
+    fail(pos, 'prefix_not_allowed',
+         'prefix match "#" is not allowed in this context')
+end
+
+--- accept_prefix makes "#" the current token.
+--- @param p table parser state
+--- @param pos integer
+local function accept_prefix(p, pos)
+    p.kind, p.pos = '#', pos + 1
+end
+
 --- accept_ordered_choice makes "/" the current token.
 --- @param p table parser state
 --- @param pos integer
@@ -773,8 +791,8 @@ local function accept_ordered_choice(p, pos)
 end
 
 -- Context dependent behavior. Each context defines how names resolve, how a
--- class ("[") is handled, how "/" is handled and whether a possessive
--- repetition and a lookahead are allowed.
+-- class ("[") is handled, how "/" and "#" are handled and whether a
+-- possessive repetition and a lookahead are allowed.
 local CONTEXTS = {
     tokens = {
         resolve_name = resolve_tokens_name,
@@ -783,6 +801,7 @@ local CONTEXTS = {
         on_possessive = reject_possessive,
         on_lookahead = accept_lookahead,
         on_alias = reject_alias,
+        on_prefix = reject_prefix,
     },
     rules = {
         resolve_name = resolve_rules_name,
@@ -791,6 +810,7 @@ local CONTEXTS = {
         on_possessive = accept_possessive,
         on_lookahead = reject_lookahead,
         on_alias = accept_alias,
+        on_prefix = accept_prefix,
     },
 }
 
@@ -843,6 +863,8 @@ local function advance(p)
         p.kind, p.pos = SYMBOLS[b], i + 1
     elseif b == SLASH then
         p.context.on_slash(p, i)
+    elseif b == HASH then
+        p.context.on_prefix(p, i)
     elseif b == HYPHEN and byte(p.src, i + 1) == GREATER then
         p.kind, p.pos = '->', i + 2
     else
@@ -1105,10 +1127,30 @@ local function parse_alias(p, node)
     }
 end
 
---- parse_repeat parses a primary with an optional postfix operator, which a
---- "+" right after it makes possessive (?+, *+, ++), or with a count (see
---- parse_count). It returns nil if the current token cannot start a
---- primary.
+--- parse_prefix parses "#" (the current token) and the literal or the name
+--- after it, and returns the prefix node.
+--- @param p table parser state
+--- @return table node
+local function parse_prefix(p)
+    local hash = p.tpos
+    advance(p)
+    if p.kind ~= PRIMARY then
+        fail(p.tpos, 'invalid_prefix',
+             'a literal or a name is expected after "#"')
+    end
+    local node = {
+        type = 'prefix',
+        pos = hash,
+        item = p.node,
+    }
+    advance(p)
+    return node
+end
+
+--- parse_repeat parses a primary, or a prefix match "#" primary, with an
+--- optional postfix operator, which a "+" right after it makes possessive
+--- (?+, *+, ++), or with a count (see parse_count). It returns nil if the
+--- current token cannot start a primary.
 --- @param p table parser state
 --- @return table? node
 local function parse_repeat(p)
@@ -1117,6 +1159,8 @@ local function parse_repeat(p)
     if p.kind == PRIMARY then
         node = p.node
         advance(p)
+    elseif p.kind == '#' then
+        node = parse_prefix(p)
     elseif grouped then
         node = parse_group(p)
     else

@@ -238,6 +238,12 @@ local function combine(a, node, res, k, sets)
             union(out, res[item])
         end
         return out
+    elseif t == 'prefix' then
+        -- the token of its item (the longer tokens that it can split are
+        -- not counted yet: WI-18)
+        local out = {}
+        union(out, res[node.item])
+        return out
     end
     local s = res[node.item]
     if t == 'opt' then
