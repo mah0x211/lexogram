@@ -52,6 +52,10 @@
 -- sets overlap when one has "a ANY" and the other a string that starts
 -- with a. A prefix match that splits no token is warned about
 -- (unneeded_prefix).
+--
+-- A rule may refer to a token listed in skip: the sets count it as any
+-- other token, and the analyzer passes it to the rules where they can take
+-- it (see lexogram.analyzer).
 local next = next
 local rawget = rawget
 local ipairs = ipairs
@@ -159,10 +163,12 @@ end
 --- ids of the longer tokens that a prefix node splits (see
 --- lexogram.compile.prefix), without the kinds that it matches as they are
 --- (its item and the contextual keywords read as it) and without the
---- skipped tokens, which never reach the parser. It also returns the
---- automata of the items, by kind id, which it fills as it is called: the
---- runtime finds with them the part of a longer token that the item
---- matches (a delimited token has none: no longer token starts with it).
+--- skipped tokens: a prefix match splits none, also one that the rules
+--- refer to, which reaches them only where they take it as it is. It also
+--- returns the automata of the items, by kind id, which it fills as it is
+--- called: the runtime finds with them the part of a longer token that the
+--- item matches (a delimited token has none: no longer token starts with
+--- it).
 --- @param grammar table
 --- @param lexer table result of lexogram.compile.lexer.build
 --- @param terminal function
@@ -412,30 +418,6 @@ local function preorder(ast)
         end
     end
     return out
-end
-
---- check_skipped reports references to tokens listed in skip.
---- @param ctx table
-local function check_skipped(ctx)
-    local skipped = {}
-    local skip = rawget(ctx.grammar, 'skip')
-    if type(skip) == 'table' then
-        for _, name in next, skip do
-            skipped[name] = true
-        end
-    end
-    for _, name in ipairs(ctx.names) do
-        for _, node in ipairs(preorder(ctx.rules[name])) do
-            if node.type == 'ref' and skipped[node.name] and ctx.terminal(node) then
-                add_diagnostic(ctx, 'error', 'skipped_token',
-                               pair('rules', shown(ctx, name)), node.pos,
-                               'rules.' .. shown(ctx, name) .. ' refers to ' ..
-                                   node.name ..
-                                   ', which is listed in skip and never' ..
-                                   ' reaches the parser')
-            end
-        end
-    end
 end
 
 --- productive_node returns true if root derives a finite token string,
@@ -831,7 +813,6 @@ local function analyze(grammar, lexer_result)
         diagnostics = {},
         unneeded = {},
     }
-    check_skipped(ctx)
     local prefix_of, automata = new_prefix(grammar, lexer_result, terminal,
                                            aliases)
     ctx.analysis = ll.analyze(rules, rawget(grammar, 'start'), terminal,

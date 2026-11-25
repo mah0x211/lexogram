@@ -31,6 +31,15 @@
 -- one. Lookahead keeps raw tokens (skipped ones included) in a queue and
 -- looks at most two valid tokens ahead.
 --
+-- A skipped token of a kind that the rules refer to is a valid token where
+-- the rules can take it, and is skipped elsewhere. Whether they can take it
+-- is found by following the instructions without side effects, from the
+-- instruction being run (the start of the alternative for a TRY, so that an
+-- ordered choice tries each alternative as it would without the token) and
+-- through the frames whose rest can be empty; for the second token of
+-- lookahead, after the first one. A grammar whose rules refer to no
+-- skipped token keeps the lookahead of the queue as it was.
+--
 -- Events are four integers each (op, kind, third, fourth):
 --   TOKEN (1)  kind, start, stop (stop is the first position after it)
 --   ENTER (2)  kind, start, number of the matching EXIT event
@@ -77,6 +86,7 @@ local type = type
 local error = error
 local next = next
 local ipairs = ipairs
+local setmetatable = setmetatable
 local sort = table.sort
 local concat = table.concat
 local sub = string.sub
@@ -97,6 +107,7 @@ local SWITCH = codegen.SWITCH
 local TEST = codegen.TEST
 local TRY = codegen.TRY
 local PREFIX = codegen.PREFIX
+local OPERANDS = codegen.OPERANDS
 -- codegen.COMMIT is the only other opcode; it is the last branch of the
 -- dispatch below.
 
@@ -201,6 +212,140 @@ local function skip_set(kinds)
     return set
 end
 
+--- visible_set returns the skipped kinds that the instructions consume
+--- (MATCH or PREFIX), or nil when there are none.
+--- @param code integer[]
+--- @param skipped table
+--- @return table?
+local function visible_set(code, skipped)
+    local set
+    local pc = 1
+    while code[pc] do
+        local op = code[pc]
+        if (op == MATCH or op == PREFIX) and skipped[code[pc + 1]] then
+            set = set or {}
+            set[code[pc + 1]] = true
+        end
+        pc = pc + 1 + OPERANDS[op]
+    end
+    return set
+end
+
+-- for each syntax table, kept while the compiled grammar is in use: the
+-- result of visible_set (false for none) and the functions of new_reach
+local visibles = setmetatable({}, {
+    __mode = 'k',
+})
+local reaches = setmetatable({}, {
+    __mode = 'k',
+})
+
+--- new_reach returns two functions of the instructions of syntax:
+--- first(p), the set of the kinds that the instructions from address p can
+--- consume first before the rule they are in returns, and whether they can
+--- reach its RET without consuming any; and goes_on(q), the addresses where
+--- the instruction at q, a JUMP, SWITCH, TEST, TRY or COMMIT, can go on.
+--- Each address is computed once.
+--- @param syntax table compiled.syntax
+--- @return function first
+--- @return function goes_on
+local function new_reach(syntax)
+    local code, decisions, rules = syntax.code, syntax.decisions, syntax.rules
+    local sets, nulls, nexts = {}, {}, {}
+
+    local function goes_on(q)
+        local list = nexts[q]
+        if not list then
+            local op = code[q]
+            if op == JUMP then
+                list = {
+                    code[q + 1],
+                }
+            elseif op == SWITCH then
+                list = {}
+                local seen = {}
+                local dec = decisions[code[q + 1]]
+                for _, a in next, dec.first do
+                    if not seen[a] then
+                        seen[a] = true
+                        list[#list + 1] = a
+                    end
+                end
+                for _, second in next, dec.second do
+                    for _, a in next, second do
+                        if not seen[a] then
+                            seen[a] = true
+                            list[#list + 1] = a
+                        end
+                    end
+                end
+            elseif op == TEST or op == TRY then
+                list = {
+                    q + 3,
+                    code[q + 2],
+                }
+            else -- COMMIT
+                list = {
+                    q + 1,
+                }
+            end
+            nexts[q] = list
+        end
+        return list
+    end
+
+    local first
+    first = function(p)
+        local set = sets[p]
+        if set then
+            return set, nulls[p]
+        end
+        set = {}
+        -- a rule cannot call itself before consuming (left recursion is
+        -- rejected), so an address is never asked for while it is computed
+        sets[p], nulls[p] = set, false
+        local null = false
+        local stack, n, seen = {
+            p,
+        }, 1, {}
+        while n > 0 do
+            local q = stack[n]
+            stack[n] = nil
+            n = n - 1
+            if not seen[q] then
+                seen[q] = true
+                local op = code[q]
+                if op == MATCH or op == PREFIX then
+                    set[code[q + 1]] = true
+                elseif op == RET then
+                    null = true
+                elseif op == CALL or op == TAILCALL then
+                    local inner, empty = first(rules[code[q + 1]].entry)
+                    for k in next, inner do
+                        set[k] = true
+                    end
+                    if empty then
+                        if op == CALL then
+                            n = n + 1
+                            stack[n] = q + 2
+                        else
+                            null = true
+                        end
+                    end
+                else
+                    for _, a in ipairs(goes_on(q)) do
+                        n = n + 1
+                        stack[n] = a
+                    end
+                end
+            end
+        end
+        nulls[p] = null
+        return set, null
+    end
+    return first, goes_on
+end
+
 --- contextual_tables returns, for the contextual keywords of kinds, the
 --- keywords of each base kind as an array of { kind, text, ignore_case }
 --- (text lowered when ignore_case) and the base kind of each keyword.
@@ -241,6 +386,24 @@ local function parse(compiled, source)
     local syntax = compiled.syntax
     local code, decisions, rules = syntax.code, syntax.decisions, syntax.rules
     local skipped = skip_set(kinds)
+    -- the skipped kinds that the rules refer to, which reach them where
+    -- they can take them (nil: none, the tokens of skip are all skipped)
+    local visible = visibles[syntax]
+    if visible == nil then
+        visible = visible_set(code, skipped) or false
+        visibles[syntax] = visible
+    end
+    local first, goes_on
+    if visible then
+        local reach = reaches[syntax]
+        if not reach then
+            reach = {
+                new_reach(syntax),
+            }
+            reaches[syntax] = reach
+        end
+        first, goes_on = reach[1], reach[2]
+    end
     local by_base, base_of = contextual_tables(kinds)
     local len = #source
 
@@ -407,9 +570,141 @@ local function parse(compiled, source)
         end
     end
 
-    --- peek returns the kind and queue index of the n-th valid token
-    --- ahead (kind 0 and nil at the end of input).
-    local function peek(n)
+    -- the address from which the rules would take the next tokens, as last
+    -- given to peek: the instruction being run, the first alternative tried
+    -- by a TRY, or the entry of a rule entered (0 after the start rule
+    -- returned)
+    local cur = 0
+
+    --- can_take returns true if the rules can take a token of kind k from
+    --- address p in the frame at depth d, returning from the frames whose
+    --- rest can be empty.
+    local function can_take(k, p, d)
+        while p ~= 0 do
+            local set, null = first(p)
+            if set[k] then
+                return true
+            elseif not null then
+                return false
+            end
+            -- the frame at depth 1 returns to 0
+            p, d = fret[d], d - 1
+        end
+        return false
+    end
+
+    --- can_take_after returns true if the rules, from address p in the
+    --- frame at depth d, can take a token of kind k1 and then one of kind
+    --- k. The instructions are followed without side effects; the calls
+    --- made on the way are kept as a list { ret, up, id }.
+    local function can_take_after(k1, k, p, d)
+        local stack = {
+            p,
+            false,
+            d,
+        }
+        local n = 3
+        local seen = {}
+        local ids = 0
+        while n > 0 do
+            local q, ws, dd = stack[n - 2], stack[n - 1], stack[n]
+            stack[n - 2], stack[n - 1], stack[n] = nil, nil, nil
+            n = n - 3
+            local key = q .. ' ' .. (ws and ws.id or 0) .. ' ' .. dd
+            if q ~= 0 and not seen[key] then
+                seen[key] = true
+                local op = code[q]
+                local to
+                if op == MATCH or op == PREFIX then
+                    local x = code[q + 1]
+                    if x == k1 or base_of[k1] == x then
+                        -- what follows the token, through the calls made
+                        -- on the way and then the frames
+                        local r, up, rd = q + 2, ws, dd
+                        while r ~= 0 do
+                            local set, null = first(r)
+                            if set[k] then
+                                return true
+                            elseif not null then
+                                break
+                            elseif up then
+                                r, up = up.ret, up.up
+                            else
+                                -- the frame at depth 1 returns to 0
+                                r, rd = fret[rd], rd - 1
+                            end
+                        end
+                    end
+                elseif op == RET then
+                    if ws then
+                        to, ws = ws.ret, ws.up
+                    else
+                        to, dd = fret[dd], dd - 1
+                    end
+                elseif op == CALL then
+                    ids = ids + 1
+                    ws = {
+                        ret = q + 2,
+                        up = ws,
+                        id = ids,
+                    }
+                    to = rules[code[q + 1]].entry
+                elseif op == TAILCALL then
+                    to = rules[code[q + 1]].entry
+                else
+                    for _, a in ipairs(goes_on(q)) do
+                        stack[n + 1], stack[n + 2], stack[n + 3] = a, ws, dd
+                        n = n + 3
+                    end
+                end
+                if to then
+                    stack[n + 1], stack[n + 2], stack[n + 3] = to, ws, dd
+                    n = n + 3
+                end
+            end
+        end
+        return false
+    end
+
+    --- peek_visible is peek for a grammar whose rules refer to skipped
+    --- tokens: such a token is a valid token where the rules can take it
+    --- from the address at (cur when absent), after the valid tokens before
+    --- it, and is skipped elsewhere. The result depends on the address and
+    --- the frames, so the index of the next valid token is not kept.
+    local function peek_visible(n, at)
+        if at then
+            cur = at
+        end
+        local i = qh
+        local k1
+        while true do
+            if i > qt and not read() then
+                return END, nil
+            end
+            local k = qk[i]
+            local valid = not skipped[k]
+            if not valid and visible[k] then
+                if k1 then
+                    valid = can_take_after(k1, k, cur, depth)
+                else
+                    valid = can_take(k, cur, depth)
+                end
+            end
+            if valid then
+                n = n - 1
+                if n == 0 then
+                    return k, i
+                end
+                k1 = k
+            end
+            i = i + 1
+        end
+    end
+
+    --- peek_plain returns the kind and queue index of the n-th valid token
+    --- ahead (kind 0 and nil at the end of input), for a grammar whose
+    --- rules refer to no skipped token.
+    local function peek_plain(n)
         local i = qh
         if next_i then
             if n == 1 then
@@ -434,6 +729,9 @@ local function parse(compiled, source)
             i = i + 1
         end
     end
+
+    -- peek(n, at): the n-th valid token ahead for the rules at address at
+    local peek = visible and peek_visible or peek_plain
 
     --- emit appends an event and returns its number.
     local function emit(op, kind, third, fourth)
@@ -461,7 +759,7 @@ local function parse(compiled, source)
         local kind = rule.kind
         fkind[depth] = kind
         if kind ~= 0 then
-            local _, i = peek(1)
+            local _, i = peek(1, rule.entry)
             local start = len + 1
             if i then
                 if i > qh then
@@ -557,7 +855,7 @@ local function parse(compiled, source)
         local op = code[pc]
         if op == MATCH then
             local k = code[pc + 1]
-            local t, i = peek(1)
+            local t, i = peek(1, pc)
             if (t == k or base_of[t] == k) and i then
                 if i > qh then
                     flush(i)
@@ -578,7 +876,7 @@ local function parse(compiled, source)
             end
         elseif op == PREFIX then
             local k = code[pc + 1]
-            local t, i = peek(1)
+            local t, i = peek(1, pc)
             local stop
             if i then
                 if t == k or base_of[t] == k then
@@ -609,11 +907,11 @@ local function parse(compiled, source)
             end
         elseif op == TEST then
             local d = decisions[code[pc + 1]]
-            local t = peek(1)
+            local t = peek(1, pc)
             local take = d.enter[t]
             local second = d.second[t]
             if take and second then
-                take = second[(peek(2))] or second[ANY]
+                take = second[(peek(2, pc))] or second[ANY]
             end
             if take then
                 pc = pc + 3
@@ -623,11 +921,11 @@ local function parse(compiled, source)
             end
         elseif op == SWITCH then
             local d = decisions[code[pc + 1]]
-            local t = peek(1)
+            local t = peek(1, pc)
             local second = d.second[t]
             local to
             if second then
-                to = second[(peek(2))]
+                to = second[(peek(2, pc))]
             else
                 to = d.first[t]
             end
@@ -652,7 +950,7 @@ local function parse(compiled, source)
                 -- the start rule returned: the input must end here, and
                 -- an erroneous token read before its end (a skipped one)
                 -- stops the analysis below
-                if peek(1) ~= END then
+                if peek(1, 0) ~= END then
                     expect(END)
                     pc = fail()
                 elseif not failure then
@@ -664,7 +962,10 @@ local function parse(compiled, source)
             pc = code[pc + 1]
         elseif op == TRY then
             local d = decisions[code[pc + 1]]
-            if d.first[(peek(1))] then
+            -- the alternative is tried from its own start: a skipped token
+            -- that only a later alternative or what follows takes does not
+            -- keep it from being tried
+            if d.first[(peek(1, pc + 3))] then
                 if ntry == 0 and qh > COMPACT then
                     -- the outermost backtrack point: move the tokens not
                     -- yet written to the start of the queue, so that it
