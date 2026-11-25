@@ -103,14 +103,12 @@ function testcase.a_prefix_match_names_a_literal_or_a_token()
         'undeclared_literal rules.type 17: rules.type refers to undeclared' ..
             ' literal ">="',
     })
-    -- a skipped token never reaches the parser
+    -- a skipped token that the rules refer to reaches them where they can
+    -- take it
     assert.equal(errors_of({
         chunk = '(type ";")*',
         type = 'name ("<" type #space)?',
-    }), {
-        'skipped_token rules.type 17: rules.type refers to space, which is' ..
-            ' listed in skip and never reaches the parser',
-    })
+    }), {})
 end
 
 function testcase.a_prefix_match_matches_the_token_it_names()

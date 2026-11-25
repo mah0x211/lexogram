@@ -339,21 +339,17 @@ function testcase.analyze_reports_nullable_repetitions()
     })
 end
 
-function testcase.analyze_reports_skipped_tokens()
+function testcase.analyze_accepts_references_to_skipped_tokens()
+    -- the analyzer passes a skipped token to the rules where they can take
+    -- it, so a rule may refer to one; the decisions count it as any token
     local result, diagnostics = analyze(grammar({
         rules = {
-            s = 'name space name',
+            s = 'name space name | name name',
         },
     }))
 
-    assert.is_nil(result)
-    assert.equal(diagnostics, {
-        at('error', 'skipped_token', {
-            'rules',
-            's',
-        }, 6, 'rules.s refers to space, which is listed in skip and never' ..
-               ' reaches the parser'),
-    })
+    assert.is_table(result)
+    assert.equal(diagnostics, {})
 end
 
 function testcase.analyze_stops_after_left_recursion()

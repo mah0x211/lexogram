@@ -440,5 +440,6 @@ return {
     COMMIT = COMMIT,
     PREFIX = PREFIX,
     ANY = ANY,
+    OPERANDS = OPERANDS,
     generate = generate,
 }
