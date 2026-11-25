@@ -121,7 +121,7 @@ The [lexogram command](command.md) does the same: `lexogram compile c23.lua -o c
 | `tokens` | yes | table | Name → pattern, array of patterns, delimited token table or prefixed table |
 | `symbols` | | array of literals | Punctuation |
 | `keywords` | | array of literals | Reserved words |
-| `skip` | | array of token names | Tokens skipped between the elements of the rules |
+| `skip` | | array of token names | Tokens skipped between the elements of the rules, except where the rules take them |
 | `leading` | | array of pattern token names | Tokens tried at the start of the input only |
 | `rules` | yes | table | Name → pattern |
 | `recover` | | array of rule names | Rules to recover in after a syntax error (not implemented yet) |
@@ -283,7 +283,29 @@ rules = {
 
 ## skip
 
-The tokens that may appear anywhere between the elements of the rules, such as white space and comments. A rule cannot refer to them. They are still TOKEN events of the event array (their kind has `skip = true`), placed outside the ranges of the rules, so that the events cover the whole source.
+The tokens that may appear anywhere between the elements of the rules, such as white space and comments. They are still TOKEN events of the event array (their kind has `skip = true`), placed outside the ranges of the rules, so that the events cover the whole source.
+
+A rule may refer to a token in `skip`. Such a token reaches the rules where they can take it, from where the analysis is and through the rules that would return without taking anything, and it is skipped elsewhere, as any token in `skip`. A newline that ends a statement:
+
+```lua
+tokens = { name = [[ [a-z]+ ]], space = [[ [ \t]+ ]], newline = [[ "\n" ]], comment = [[ "#" [^\n]* ]] },
+skip = { 'space', 'newline', 'comment' },
+rules = {
+    body = [[ statement* ]],
+    statement = [[ simple newline ]],
+    simple = [[ (name "=")? expr ]],
+    expr = [[ term ("+" term)* ]],
+    term = [[ primary call* ]],
+    primary = [[ name | "(" (expr ("," expr)*)? ")" ]],
+    call = [[ "(" (expr ("," expr)*)? ")" ]],
+},
+```
+
+- `f` and `(x)` on the next line are two statements: after `f`, the statement takes the newline, which ends it.
+- In `(f` and `x))` on the next line, the newline is in brackets, where no rule takes it, so it is skipped and `f(x)` is a call. The newlines of empty lines and the one after a comment are skipped as well.
+- A token taken is a TOKEN event in the range of the rule that takes it, also as its first token; one skipped stays outside the ranges.
+- A token that the rules can take is taken, as any other token, even when what comes after it would also do without it: in `"a" "b"? newline "c"`, the input `a`, newline, `b`, newline, `c` fails at `b`, as the newline after `a` is taken by what follows the optional `b`. The compilation does not report such a grammar yet. An ordered choice tries each alternative as it would without the token: in `"a" "c" / newline "a" "b"`, a newline then `a c` matches the first alternative, which skips the newline.
+- A prefix match `#X` does not split a token in `skip`, also one that the rules refer to.
 
 ## leading
 
@@ -500,14 +522,14 @@ Two pattern tokens (or two leading tokens) that can match the same whole string 
 
 ## How rules are applied
 
-The analysis is deterministic and looks at most two tokens ahead (skipped tokens are not counted).
+The analysis is deterministic and looks at most two tokens ahead (skipped tokens are not counted, except those that the rules take: see [skip](#skip)).
 
 - **Choice `|`**: the alternatives must be told apart by the next two tokens; otherwise it is an error (`ambiguous_choice`). As long as they can be told apart, their order does not matter.
 - **Repetition `?`, `*`, `+`**: greedy, without backtracking. When the next tokens can start the element, the element is taken. Where two tokens of lookahead cannot tell whether to take the element or to go on, the repetition is ambiguous: that is an error (`ambiguous_repetition`), as for a choice, unless the repetition is written possessive (`?+`, `*+`, `++`), which declares that the greedy choice is intended. A possessive repetition parses the same way; one that is not ambiguous is warned about (`unneeded_possessive`). For example, in `name* name?` the `name?` can never match, which is likely a mistake and is reported; a grammar that means it writes `name*+ name?`.
 - **Ordered choice `/`** (rules only): the first alternative is tried; if a syntax error occurs inside it, the input and the events are rewound to its start and the next alternative is tried. Once an alternative succeeds it is kept, even if a later part fails. When the next token cannot start an alternative, it is not tried. The overlap of the alternatives is not checked: their order decides. A rewind reads the tokens again from a queue, without tokenizing them again, but builds again what the failed alternative had parsed. Nested trials can cost much time; use them only where two tokens cannot decide. In particular, alternatives that start with the same rule, nested in one another, read that rule again at the same position on each rewind, so the time grows exponentially with the depth of the nesting: the C23 grammar takes about 0.4 s on Lua 5.1 for `(typeof(E)){ 0 }` nested fourteen deep (220 bytes), where a cast reads the type name and fails at `{`, and a compound literal reads it again. Write the common start outside of the choice, or a choice that two tokens decide with `|`, where you can.
 - **Syntax errors**: the analysis stops with `nil` and `{ code, pos, line, column, expected, actual, message }`. The error is at the furthest token where the analysis failed, also inside the alternatives of ordered choices that were tried and rewound, and `expected` lists the kinds expected by every failure at that token: for `stat = [[ name "=" name ";" / name "(" ")" ]]`, `f = x y` fails at `y` (expected `";"`), not at `=`, where the last alternative failed. `code` is `syntax_error`, or for a token that cannot be read `unterminated_token`, `nested_delimiter` (see [Delimited token tables](#delimited-token-tables)) or `invalid_token` (see [Arrays of patterns](#arrays-of-patterns)).
 
-The compilation also rejects a repetition of an element that can match nothing (`nullable_repetition`), a rule that cannot derive a finite sequence of tokens (`nonterminating_rule`), and a rule that refers to a token in `skip` (`skipped_token`).
+The compilation also rejects a repetition of an element that can match nothing (`nullable_repetition`) and a rule that cannot derive a finite sequence of tokens (`nonterminating_rule`).
 
 ## Diagnostics
 
@@ -529,6 +551,6 @@ The compilation also rejects a repetition of an element that can match nothing (
 | Structure | `invalid_type`, `missing_field`, `unknown_field`, `invalid_key`, `invalid_value`, `invalid_version`, `version_too_new`, `version_too_old`, `empty_item`, `duplicate_item`, `reserved_item`, `invalid_name`, `reserved_name`, `duplicate_name`, `undefined_reference`, `invalid_reference`, `undeclared_literal` |
 | Pattern | `unexpected_char`, `unterminated_literal`, `empty_literal`, `invalid_escape`, `unterminated_class`, `empty_class`, `invalid_range`, `mixed_class`, `invalid_utf8`, `invalid_codepoint`, `unbalanced_paren`, `missing_operand`, `repeated_postfix`, `mixed_choice`, `class_not_allowed`, `ordered_choice_not_allowed`, `possessive_not_allowed`, `lookahead_not_allowed`, `invalid_lookahead`, `invalid_repetition`, `alias_not_allowed`, `invalid_alias`, `prefix_not_allowed`, `invalid_prefix`, `unknown_builtin`, `invalid_reference`, `reserved_name`, `nesting_too_deep` |
 | Tokens | `fragment_recursion`, `empty_match`, `token_conflict`, `literal_conflict`, `invalid_delimiter`, `capture_overlap`, `delimiter_conflict`, `invalid_contextual`, `unmatchable_pattern`, `automaton_too_large` |
-| Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `skipped_token`, `ambiguous_choice`, `ambiguous_repetition` |
+| Rules | `left_recursion`, `nonterminating_rule`, `nullable_repetition`, `ambiguous_choice`, `ambiguous_repetition` |
 | Warnings | `never_adopted`, `unneeded_possessive`, `unneeded_prefix`, `unused_token`, `unused_fragment`, `unused_literal`, `unreachable_rule` |
 | Warnings of the merge | `already_defined` (a [mixin](#mixins) adds what exists; returned by `lexogram.load`, `lexogram.merge` and `lexogram.grammar`, with the mixin as `source`) |
